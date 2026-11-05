@@ -1509,6 +1509,7 @@ void PADrawStatusPanel()
       return;
    }
    MAFrame f=g_maFrames[index];
+   int digits=(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS);
    bool checked=(f.state!=MA_STATE_INSUFFICIENT && f.lastClosedBar>0);
    string text="GLORYALGO | PRICE ACTION CHECK\n";
    text+="TIMEFRAME: "+PATFCode(f.tf)+"\n";
