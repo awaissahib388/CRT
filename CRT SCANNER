@@ -7,7 +7,7 @@
 //|                 Command Center + PA chart verification layer    |
 //+------------------------------------------------------------------+
 #property strict
-#property version "1.98"
+#property version "1.99"
 #property description "GloryAlgo CRT Scanner - CRT/CISD with visible structure and price-action verification"
 
 //------------------------- ENUMS -----------------------------------//
@@ -458,6 +458,10 @@ struct MAFrame
    double inducementPrice;
    double dolPrice;
    string dolName;
+   double targetPrice;
+   string targetName;
+   bool targetValid;
+   bool targetReached;
    bool demandFlip;
    bool supplyFlip;
    bool mitigationDemand;
@@ -580,6 +584,7 @@ bool MAAnalyzeFrame(string symbol,ENUM_TIMEFRAMES tf,MAFrame &out)
    out.supportTrendlineValid=false; out.resistanceTrendlineValid=false; out.supportTrendlineTouch=false; out.resistanceTrendlineTouch=false;
    out.supportTrendlineNow=0.0; out.resistanceTrendlineNow=0.0; out.bullQML=false; out.bearQML=false; out.bullQMLLevel=0.0; out.bearQMLLevel=0.0;
    out.bullInducement=false; out.bearInducement=false; out.inducementPrice=0.0; out.dolPrice=0.0; out.dolName="NONE";
+   out.targetPrice=0.0; out.targetName="NONE"; out.targetValid=false; out.targetReached=false;
    out.demandFlip=false; out.supplyFlip=false; out.mitigationDemand=false; out.mitigationSupply=false;
    out.demandFreshness=0; out.supplyFreshness=0; out.demandMissedBars=0; out.supplyMissedBars=0; out.liquiditySNR=false; out.lastClosedBar=0;
    MqlRates r[]; ArraySetAsSeries(r,true);
@@ -877,13 +882,16 @@ bool MAAnalyzeFrame(string symbol,ENUM_TIMEFRAMES tf,MAFrame &out)
       }
    }
 
-   // DOL and inducement candidates. DOL is a target hypothesis, not a direction signal.
+   // DOL is the primary opposing liquidity objective inside the active range.
+   // The projected target is kept separate: it is the nearest unconsumed major
+   // swing pool BEYOND that DOL, not a duplicate of the range boundary.
    if(out.rangeValid)
    {
       if(out.state==MA_STATE_BULL || (out.state==MA_STATE_RANGE && r[1].close<out.eq))
       {out.dolPrice=out.rangeHigh;out.dolName="ERL HIGH";}
       else if(out.state==MA_STATE_BEAR || (out.state==MA_STATE_RANGE && r[1].close>=out.eq))
       {out.dolPrice=out.rangeLow;out.dolName="ERL LOW";}
+
       if(out.dolPrice>0.0)
       {
          for(int z=minorN-1;z>=0;z--)
@@ -892,6 +900,73 @@ bool MAAnalyzeFrame(string symbol,ENUM_TIMEFRAMES tf,MAFrame &out)
             {out.bullInducement=true;out.inducementPrice=minor[z].price;break;}
             if(out.dolName=="ERL LOW" && minor[z].isHigh && minor[z].time<r[1].time)
             {out.bearInducement=true;out.inducementPrice=minor[z].price;break;}
+         }
+      }
+
+      if(out.dolName=="ERL HIGH" && out.dolPrice>r[1].close)
+      {
+         double nearestHigh=DBL_MAX;
+         bool nearestHighReached=false;
+         for(int z=0;z<majorN;z++)
+         {
+            if(!major[z].isHigh || major[z].price<=out.dolPrice+buffer)
+               continue;
+            int swingBar=iBarShift(symbol,tf,major[z].time,false);
+            if(swingBar<2)
+               continue;
+            bool consumedBeforeLatest=false;
+            for(int j=2;j<swingBar;j++)
+            {
+               if(r[j].high>=major[z].price+buffer)
+               {consumedBeforeLatest=true;break;}
+            }
+            if(consumedBeforeLatest)
+               continue;
+            if(major[z].price<nearestHigh)
+            {
+               nearestHigh=major[z].price;
+               nearestHighReached=(r[1].high>=major[z].price+buffer);
+            }
+         }
+         if(nearestHigh<DBL_MAX)
+         {
+            out.targetPrice=nearestHigh;
+            out.targetName="NEXT EXTERNAL HIGH";
+            out.targetValid=true;
+            out.targetReached=nearestHighReached;
+         }
+      }
+      else if(out.dolName=="ERL LOW" && out.dolPrice<r[1].close)
+      {
+         double nearestLow=-DBL_MAX;
+         bool nearestLowReached=false;
+         for(int z=0;z<majorN;z++)
+         {
+            if(major[z].isHigh || major[z].price>=out.dolPrice-buffer)
+               continue;
+            int swingBar=iBarShift(symbol,tf,major[z].time,false);
+            if(swingBar<2)
+               continue;
+            bool consumedBeforeLatest=false;
+            for(int j=2;j<swingBar;j++)
+            {
+               if(r[j].low<=major[z].price-buffer)
+               {consumedBeforeLatest=true;break;}
+            }
+            if(consumedBeforeLatest)
+               continue;
+            if(major[z].price>nearestLow)
+            {
+               nearestLow=major[z].price;
+               nearestLowReached=(r[1].low<=major[z].price-buffer);
+            }
+         }
+         if(nearestLow>-DBL_MAX)
+         {
+            out.targetPrice=nearestLow;
+            out.targetName="NEXT EXTERNAL LOW";
+            out.targetValid=true;
+            out.targetReached=nearestLowReached;
          }
       }
    }
@@ -1099,6 +1174,7 @@ void MADrawPanel()
       text+="SUPPLY  "+(f.supplyActive ? DoubleToString(f.supplyLow,_Digits)+" - "+DoubleToString(f.supplyHigh,_Digits) : "NONE")+"\n";
       text+="EXPANSION  "+(f.rangeAcceptedUp ? "ACCEPTED UP" : (f.rangeAcceptedDown ? "ACCEPTED DOWN" : (f.expansionUp ? "UP CANDIDATE" : (f.expansionDown ? "DOWN CANDIDATE" : "NONE"))))+"\n";
       text+="DOL  "+f.dolName+(f.dolPrice>0.0 ? " @ "+DoubleToString(f.dolPrice,_Digits) : "")+"\n";
+      text+="TARGET  "+(f.targetValid ? f.targetName+" @ "+DoubleToString(f.targetPrice,_Digits)+(f.targetReached ? " | REACHED" : " | WAITING") : "NOT FOUND")+"\n";
       text+="IDM  "+(f.bullInducement ? "BULL "+DoubleToString(f.inducementPrice,_Digits) : (f.bearInducement ? "BEAR "+DoubleToString(f.inducementPrice,_Digits) : "NONE"))+"\n";
       text+="RETEST  "+(f.bullRetest ? "BULL " : "")+(f.bearRetest ? "BEAR" : (f.bullRetest ? "" : "NONE"))+"\n";
       text+="VI  "+(f.bullVI ? "BULL" : (f.bearVI ? "BEAR" : "NONE"))+"  KISSING "+(f.kissingCandle ? DoubleToString(f.kissingLevel,_Digits) : "NONE")+"\n";
@@ -1111,6 +1187,7 @@ void MADrawPanel()
       if(Show_Analysis_Price_Levels)
       {
          MADrawLevel("DOL",f.dolPrice,InpBearColor,STYLE_DASH);
+         MADrawLevel("TARGET",(f.targetValid ? f.targetPrice : 0.0),InpInkColor,STYLE_DASHDOT);
          MADrawLevel("IDM",f.inducementPrice,InpMutedTextColor,STYLE_DOT);
          MADrawLevel("PCZ",(f.pocFound ? f.pocLevel : 0.0),InpInkColor,STYLE_DASHDOT);
          MADrawLevel("KISSING",(f.kissingCandle ? f.kissingLevel : 0.0),InpBullColor,STYLE_DOT);
@@ -1489,6 +1566,7 @@ void PADrawStatusPanel()
    text+="RANGE: "+PAStatus(checked,f.rangeValid)+" | LOCATION: "+(checked && f.rangeValid ? MARangeLocation(f.rangePos) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
    text+="LIQUIDITY SWEEP: "+PAStatus(checked,(f.bullSweep || f.bearSweep))+"\n";
    text+="IDM: "+PAStatus(checked,(f.bullInducement || f.bearInducement))+" | DOL: "+(checked && f.dolPrice>0.0 ? "CANDIDATE" : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
+   text+="TARGET: "+(checked ? (f.targetValid ? (f.targetReached ? "REACHED" : "WAITING") : "NOT FOUND") : "NOT CHECKED")+"\n";
    text+="FVG TOUCH: "+PAStatus(checked,(f.bullFVG || f.bearFVG))+" | IFVG: "+PAStatus(checked,(f.bullIFVG || f.bearIFVG))+"\n";
    text+="VI: "+PAStatus(checked,(f.bullVI || f.bearVI))+" | KISSING: "+PAStatus(checked,f.kissingCandle)+"\n";
    text+="ENGULFING: "+PAStatus(checked,(f.bullishEngulf || f.bearishEngulf))+" | FAILED BREAK: "+PAStatus(checked,(f.failedBreakUp || f.failedBreakDown))+"\n";
@@ -1537,7 +1615,7 @@ void MAWriteLog(const MAFrame &f)
    int h=FileOpen("GloryAlgo_Market_Analysis_v2.csv",FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ,',');
    if(h==INVALID_HANDLE) h=FileOpen("GloryAlgo_Market_Analysis_v2.csv",FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ,',');
    if(h==INVALID_HANDLE) return;
-   if(FileSize(h)==0) FileWrite(h,"bar_time","symbol","timeframe","state","score","major_high","major_low","protected_high","protected_low","range_high","range_low","eq","range_location","bull_sweep","bear_sweep","bull_fvg","bear_fvg","bull_engulf","bear_engulf","failed_up","failed_down","poc_level","poc_tests","range_accepted_up","range_accepted_down","bull_retest","bear_retest","bull_vi","bear_vi","kissing_level","support_trendline","resistance_trendline","bull_qml","bear_qml","dol_name","dol_price","idm_price","demand_flip","supply_flip","mitigation_demand","mitigation_supply","liquidity_snr","bull_ifvg","bear_ifvg","bull_engulf_flip","bear_engulf_flip");
+   if(FileSize(h)==0) FileWrite(h,"bar_time","symbol","timeframe","state","score","major_high","major_low","protected_high","protected_low","range_high","range_low","eq","range_location","bull_sweep","bear_sweep","bull_fvg","bear_fvg","bull_engulf","bear_engulf","failed_up","failed_down","poc_level","poc_tests","range_accepted_up","range_accepted_down","bull_retest","bear_retest","bull_vi","bear_vi","kissing_level","support_trendline","resistance_trendline","bull_qml","bear_qml","dol_name","dol_price","idm_price","demand_flip","supply_flip","mitigation_demand","mitigation_supply","liquidity_snr","bull_ifvg","bear_ifvg","bull_engulf_flip","bear_engulf_flip","target_name","target_price","target_valid","target_reached");
    FileSeek(h,0,SEEK_END);
    FileWrite(h,TimeToString(f.lastClosedBar,TIME_DATE|TIME_MINUTES),f.symbol,TimeframeName(f.tf),MAStateText(f.state),f.score,
       DoubleToString(f.lastMajorHigh,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),DoubleToString(f.lastMajorLow,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),
@@ -1547,7 +1625,7 @@ void MAWriteLog(const MAFrame &f)
       (int)f.rangeAcceptedUp,(int)f.rangeAcceptedDown,(int)f.bullRetest,(int)f.bearRetest,(int)f.bullVI,(int)f.bearVI,
       DoubleToString(f.kissingLevel,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.supportTrendlineValid,(int)f.resistanceTrendlineValid,
       (int)f.bullQML,(int)f.bearQML,f.dolName,DoubleToString(f.dolPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),
-      DoubleToString(f.inducementPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.demandFlip,(int)f.supplyFlip,
+      DoubleToString(f.inducementPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),f.targetName,DoubleToString(f.targetPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.targetValid,(int)f.targetReached,(int)f.demandFlip,(int)f.supplyFlip,
       (int)f.mitigationDemand,(int)f.mitigationSupply,(int)f.liquiditySNR,
       (int)f.bullIFVG,(int)f.bearIFVG,(int)f.bullEngulfFlip,(int)f.bearEngulfFlip);
    FileClose(h);
