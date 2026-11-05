@@ -1,0 +1,5835 @@
+//+------------------------------------------------------------------+
+//|                 GLORYALGO CRT SCANNER v1.97                     |
+//|                 Native MT5 Expert Advisor                       |
+//|                 Advanced + Confirmed CRT                        |
+//|                 HTF FVG Filter + CRT-Linked FVG History          |
+//|                 CISD Detection on Mapped Lower Timeframes        |
+//|                 Command Center + PA chart verification layer    |
+//+------------------------------------------------------------------+
+#property strict
+#property version "1.97"
+#property description "GloryAlgo CRT Scanner - CRT/CISD with visible structure and price-action verification"
+
+//------------------------- ENUMS -----------------------------------//
+enum ENUM_SYMBOL_SOURCE
+{
+   SYMBOLS_MANUAL=0,
+   SYMBOLS_MARKET_WATCH=1,
+   SYMBOLS_BOTH=2
+};
+
+enum ENUM_CRT_SIGNAL
+{
+   CRT_NONE=0,
+   CRT_BULL=1,
+   CRT_BEAR=2,
+   CRT_DOUBLE=3
+};
+
+enum ENUM_FVG_PERMISSION
+{
+   FVG_PERMISSION_NONE=0,
+   FVG_PERMISSION_BULLISH=1,
+   FVG_PERMISSION_BEARISH=2,
+   FVG_PERMISSION_BOTH=3
+};
+
+//------------------------- INPUTS ----------------------------------//
+input group "01. SYMBOLS"
+input ENUM_SYMBOL_SOURCE InpSymbolSource=SYMBOLS_BOTH;
+input string InpManualSymbols="EURUSD,GBPUSD,USDJPY,XAUUSD";
+input int InpMaxSymbols=100;
+
+input group "02. TIMEFRAMES"
+input string InpTimeframes="M5,M15,M30,H1,H4,D1";
+
+input group "03. SCANNER"
+input int InpScanIntervalSeconds=2;
+input bool InpEnableSetupAlerts=true;
+input bool InpEnablePushNotifications=false;
+
+input group "04. HTF FVG FILTER"
+input bool InpEnableFVGFilter=false;
+input int InpFVGLookback=100;
+input ENUM_FVG_PERMISSION InpBullCRT_FVGPermission=FVG_PERMISSION_BULLISH;
+input ENUM_FVG_PERMISSION InpBearCRT_FVGPermission=FVG_PERMISSION_BEARISH;
+input bool InpSetupRequireFVG=true;   // Dashboard setup requires an HTF FVG touch by C2
+
+input group "05. CISD"
+input bool InpEnableCISD=true;          // Controls CISD chart-state/level display; setup confirmation is always mandatory
+input bool InpDrawCISDLevels=true;
+input int InpCISDLookbackCRTCandles=2;   // How many CRT-candle lengths left of C2 the reference search may reach
+
+input group "05B. SETUP CONFLUENCES"
+input int InpMinSetupScore=4;             // Minimum optional-confluence score (default 4 of 5)
+input bool InpUseHTFCRTConfluence=true;   // +1 when nearest higher TF has a same-direction CRT
+input bool InpUseKillzones=true;          // +1 when CISD formed inside a killzone (intraday CRTs)
+input int InpLondonStartGMT=7;
+input int InpLondonEndGMT=10;
+input int InpNYStartGMT=12;
+input int InpNYEndGMT=15;
+input bool InpUseLiquiditySweep=true;     // Part of one unified liquidity confluence
+input bool InpUseLiquidityPools=true;      // +1 for equal-high/low or confirmed swing liquidity
+input bool InpUseSessionLiquidity=true;    // Part of the same unified liquidity confluence
+input bool InpUseSweepRejection=true;      // Bonus tag only; never adds to the score
+input int InpAsiaStartGMT=0;
+input int InpAsiaEndGMT=6;
+input int  InpLiquidityLookback=50;        // Prior CRT-timeframe candles searched for pools/swings
+input double InpLiquidityToleranceATR=0.10;// Equal-high/low tolerance as a fraction of average range
+input bool InpDrawSetupLevels=true;       // Draw TP / SL levels for active setups
+input bool InpDismissOnTP=true;           // Close a setup when its TP (opposite C1 extreme) is reached
+input int InpSetupMaxAgeCandles=3;        // Expire after three complete CRT candles following C2
+input bool InpEarlySetups=false;          // Early setups disabled by default
+input int InpEarlyMinScore=5;             // If manually enabled, early setups require all five score points
+
+input bool   InpStrictCRT=true;           // C2 must sweep ONE side only (double sweeps are never directional)
+input double InpMinRR=4.0;                // Hard filter: minimum planned reward:risk (entry = CISD close)
+input bool   InpUseTrendEMA=true;         // EMA 24 alignment is a bonus tag only; no score point
+input int    InpTrendEMAPeriod=24;
+input bool   InpTrendOnHigherTF=false;    // false: EMA on the CRT timeframe, true: on the next higher timeframe
+input bool   InpUseSMT=true;              // +1 on SMT divergence with a correlated symbol
+input string InpSMTPairs="EURUSD:GBPUSD,GBPUSD:EURUSD,AUDUSD:NZDUSD,NZDUSD:AUDUSD,XAUUSD:XAGUSD,XAGUSD:XAUUSD,US30:US500,US500:US30,NAS100:US500";
+input bool   InpJournal=true;             // Log closed setups to a CSV file and show the win rate
+input string InpJournalFile="GloryAlgo_Setups_Liquidity_v2.csv";
+
+input group "05C. STRUCTURE & PRICE ACTION RULES"
+input bool Show_Market_Analysis=true;
+input bool Show_Analysis_Summary=false;
+input bool Save_Analysis_Log=true;
+input int Bars_To_Check=600;
+input int Small_Swing_Left_Bars=2;
+input int Small_Swing_Right_Bars=2;
+input int Major_Swing_Left_Bars=5;
+input int Major_Swing_Right_Bars=5;
+input int Minimum_Bars_Between_Swings=2;
+input int Average_Range_Period=14;
+input double Minimum_Major_Swing_Size=1.50;
+input double Break_Confirmation_Buffer=0.03;
+input double Equal_High_Low_Tolerance=0.10;
+input double Range_Zone_Tolerance=0.015;
+input int Minimum_Rejections_For_Key_Level=2;
+input int Key_Level_Tolerance_Points=30;
+input int Save_Analysis_Every_Minutes=15;
+input bool Show_Analysis_Price_Levels=true;
+input int Bars_To_Find_Recent_Patterns=12;
+
+input group "05D. PRICE ACTION ON CHART"
+input bool Show_Price_Action_On_Chart=true;             // Show structure and price-action labels on this chart
+input bool Show_All_Timeframes=false;           // Show labels from every analysed timeframe
+input bool Show_Major_Swings=true;      // HH, HL, LH, LL, EQH and EQL
+input bool Show_Small_Swings=true;      // Smaller internal swing labels (mHH, mHL, etc.)
+input bool Show_BOS_And_Market_Shifts=true;           // BOS and market-structure shift labels
+input bool Show_Liquidity_And_IDM=true;       // BSL, SSL, sweeps and inducement
+input bool Show_Trading_Range_Levels=true;           // Range high/low, EQ, premium and discount
+input bool Show_Price_Action_Patterns=true;         // FVG, VI, engulfing, IFVG, QML and other patterns
+input bool Show_Supply_And_Demand_Zones=true;           // Supply and demand areas
+input bool Show_Detection_Status_Panel=true;         // Simple DETECTED / NOT FOUND status panel
+input int History_Bars_To_Show=250;                // Closed candles used for historical swing labels
+input int Maximum_Swing_Labels_Per_Timeframe=80;          // Limit swing labels per timeframe
+input int Chart_Label_Size=8;                     // Chart label size
+input color Neutral_Analysis_Color=C'94,93,87';
+
+input group "06. CHART OBJECTS"
+input bool InpDrawFVGZones=true;
+input bool InpDrawCRTLevels=true;
+input bool InpFilterByChartTimeframe=true;   // Show only the CRT paired with the current chart timeframe
+input int InpFVGObjectsPerTF=20;
+input int InpFVGExtendBars=30;
+input int InpRecentCRTHistoryPerTF=3;
+input color InpBullFVGColor=C'55,107,137';
+input color InpBearFVGColor=C'128,25,34';
+input color InpBullCRTLineColor=clrBlack;
+input color InpBearCRTLineColor=clrBlack;
+input color InpDoubleCRTLineColor=clrBlack;
+input int InpCRTLineWidth=2;
+input ENUM_LINE_STYLE InpCRTLineStyle=STYLE_SOLID;
+input int InpCRTLabelFontSize=8;
+
+input group "07. DASHBOARD"
+input int InpDashboardX=15;          // Default X (drag to move, position is remembered)
+input int InpDashboardY=25;          // Default Y
+input int InpDashboardMaxRows=12;       // Max setup rows shown
+input int InpFontSize=9;
+
+input group "08. COLOURS"
+input color InpPanelColor=C'250,249,245';
+input color InpRowColor=C'239,237,230';
+input color InpBorderColor=C'216,213,203';
+input color InpInkColor=C'20,20,19';
+input color InpMutedTextColor=C'94,93,87';
+input color InpBullColor=C'55,107,137';
+input color InpBearColor=C'128,25,34';
+input color InpBadgeSubColor=C'236,233,225';
+
+//------------------------- GLOBALS ---------------------------------//
+string PREFIX="GA_DASH_";
+string CHART_PREFIX="GA_CRT_CHART_";
+
+string g_symbols[];
+ENUM_TIMEFRAMES g_timeframes[];
+
+int g_symbolCount=0;
+int g_timeframeCount=0;
+int g_stateCount=0;
+
+bool g_dashboardOpen=false;
+bool g_firstScanDone=false;
+
+// Dashboard position / drag state.
+int  g_dashX=15;
+int  g_dashY=25;
+int  g_boxW=124;
+int  g_boxH=26;
+int  g_minX=0;
+int  g_minY=0;
+int  g_minW=22;
+int  g_minH=20;
+
+string g_dashSig="";
+
+bool g_prevDown=false;
+bool g_dragging=false;
+int  g_pressTarget=0;   // 0 none, 1 logo, 2 panel, 3 minimize button
+int  g_pressX=0;
+int  g_pressY=0;
+int  g_startX=0;
+int  g_startY=0;
+
+bool g_origScroll=true;
+bool g_scrollLocked=false;
+
+// Dashboard filter chips: 0 ALL, 1 BULL, 2 BEAR, 3 EARLY, 4 A+/A.
+int g_filter=0;
+int g_chipX[5];
+int g_chipW[5];
+int g_chipY=0;
+int g_chipH=20;
+
+//------------------------- STATE STRUCT ---------------------------//
+struct CRTState
+{
+   string symbol;
+   ENUM_TIMEFRAMES timeframe;
+
+   datetime currentBarTime;
+   datetime confirmedC3Time;
+
+   ENUM_CRT_SIGNAL confirmedSignal;
+   ENUM_CRT_SIGNAL advancedSignal;
+
+   bool confirmedFVGQualified;
+   bool advancedFVGQualified;
+
+   // True when C2 of the confirmed CRT touched a valid HTF FVG
+   // (always evaluated, independent of the chart FVG filter).
+   bool confirmedFVGPresent;
+
+   datetime confirmedC1Time;
+   datetime confirmedC2Time;
+   datetime confirmedC3EndTime;
+
+   double confirmedC1High;
+   double confirmedC1Low;
+
+   // CISD state for the latest confirmed CRT.
+   bool cisdReferenceFound;
+   bool cisdConfirmed;
+
+   datetime cisdReferenceTime;
+   datetime cisdConfirmationTime;
+
+   double cisdReferencePrice;
+
+   // C2 extremes of the confirmed CRT (used for SL and liquidity checks).
+   double confirmedC2High;
+   double confirmedC2Low;
+
+   // Setup + confluence data.
+   bool setupActive;
+   int  setupScore;
+   bool cfHTF;
+   bool cfLiquidity;
+   bool cfLiqPool;
+   bool cfLiqSession;
+   bool cfLiqRejection;
+   int  kzId;            // 0 none, 1 London, 2 New York
+   double setupSL;
+   double setupTP;
+   double setupRR;       // <=0 means not available
+   datetime setupAlertC2;
+
+   // Active setup identity / geometry (a setup stays until SL/TP/expiry).
+   ENUM_CRT_SIGNAL setupDir;
+   bool     setupEarly;       // formed before C2 closed
+   datetime setupC2Time;
+   datetime setupExtTime;
+   datetime setupAlertExt;
+   datetime setupCisdTime;
+   double   setupCisdPrice;
+
+   // Live (still forming) candle vs the last completed candle.
+   datetime advC1Time;
+   double   advC1High;
+   double   advC1Low;
+   double   advC2Open;
+   double   advC2High;
+   double   advC2Low;
+
+   // FVG result cache for historical candidates.
+   datetime fvgCacheC2;
+   bool     fvgCacheVal;
+
+   // Extra snapshot of the forming candle (for early setups).
+   double   advC1Open;
+   double   advC1Close;
+   double   advC2Close;
+
+   // Extra confluences + planned trade of the active setup.
+   bool     cfTrend;
+   bool     cfSMT;
+   double   setupEntry;
+   datetime setupFormTime;   // when CISD confirmed (used for the AGE column)
+};
+
+CRTState g_states[];
+
+//------------------------- CRT HISTORY STRUCT ---------------------//
+struct CRTHistory
+{
+   string symbol;
+   ENUM_TIMEFRAMES timeframe;
+
+   ENUM_CRT_SIGNAL signal;
+
+   datetime c2Time;
+   datetime c3Time;
+   datetime c3EndTime;
+
+   double c1Open;
+   double c1High;
+   double c1Low;
+   double c1Close;
+
+   double c2Open;
+   double c2High;
+   double c2Low;
+   double c2Close;
+};
+
+CRTHistory g_crtHistory[];
+int g_crtHistoryCount=0;
+
+// A CRT candidate is closed only once. Keep a bounded in-memory tombstone
+// registry so a historical/early candidate cannot be reactivated on the
+// next timer/tick scan after its outcome has already been recorded.
+struct ClosedSetupKey
+{
+   string symbol;
+   ENUM_TIMEFRAMES timeframe;
+   ENUM_CRT_SIGNAL direction;
+   datetime c2Time;
+};
+ClosedSetupKey g_closedSetupKeys[];
+int g_closedSetupKeyCount=0;
+#define MAX_CLOSED_SETUP_KEYS 10000
+
+bool IsSetupKeyClosed(string symbol,ENUM_TIMEFRAMES timeframe,
+                      ENUM_CRT_SIGNAL direction,datetime c2Time)
+{
+   for(int n=0;n<g_closedSetupKeyCount;n++)
+   {
+      if(g_closedSetupKeys[n].symbol==symbol &&
+         g_closedSetupKeys[n].timeframe==timeframe &&
+         g_closedSetupKeys[n].direction==direction &&
+         g_closedSetupKeys[n].c2Time==c2Time)
+         return true;
+   }
+   return false;
+}
+
+void RememberClosedSetupKey(string symbol,ENUM_TIMEFRAMES timeframe,
+                             ENUM_CRT_SIGNAL direction,datetime c2Time)
+{
+   if(c2Time<=0 || IsSetupKeyClosed(symbol,timeframe,direction,c2Time))
+      return;
+
+   // Keep the most recent keys; older entries are beyond the scanner's
+   // practical history window and can safely be discarded.
+   if(g_closedSetupKeyCount>=MAX_CLOSED_SETUP_KEYS)
+   {
+      for(int n=1;n<g_closedSetupKeyCount;n++)
+         g_closedSetupKeys[n-1]=g_closedSetupKeys[n];
+      g_closedSetupKeyCount--;
+      ArrayResize(g_closedSetupKeys,g_closedSetupKeyCount);
+   }
+
+   if(ArrayResize(g_closedSetupKeys,g_closedSetupKeyCount+1)!=g_closedSetupKeyCount+1)
+      return;
+
+   g_closedSetupKeys[g_closedSetupKeyCount].symbol=symbol;
+   g_closedSetupKeys[g_closedSetupKeyCount].timeframe=timeframe;
+   g_closedSetupKeys[g_closedSetupKeyCount].direction=direction;
+   g_closedSetupKeys[g_closedSetupKeyCount].c2Time=c2Time;
+   g_closedSetupKeyCount++;
+}
+
+
+//------------------------- MARKET ANALYSIS ENGINE ------------------//
+// Independent read-only analysis. It never changes CRT/CISD validation or setup scoring.
+enum ENUM_MA_DIRECTION { MA_BEAR=-1, MA_NEUTRAL=0, MA_BULL=1 };
+enum ENUM_MA_STATE { MA_STATE_BEAR=-2, MA_STATE_TRANSITION=-1, MA_STATE_RANGE=0, MA_STATE_BULL=1, MA_STATE_INSUFFICIENT=2 };
+struct MASwing
+{
+   datetime time;
+   double price;
+   bool isHigh;
+   bool isMajor;
+   string relation;
+};
+struct MAFrame
+{
+   string symbol;
+   ENUM_TIMEFRAMES tf;
+   int state;
+   int score;
+   double lastMajorHigh;
+   double lastMajorLow;
+   datetime majorHighTime;
+   datetime majorLowTime;
+   double protectedHigh;
+   double protectedLow;
+   bool protectedHighActive;
+   bool protectedLowActive;
+   bool bullBOS;
+   bool bearBOS;
+   bool bullMSS;
+   bool bearMSS;
+   double rangeHigh;
+   double rangeLow;
+   double eq;
+   double q25;
+   double q75;
+   int rangePos;
+   bool rangeValid;
+   bool bullSweep;
+   bool bearSweep;
+   bool bullFVG;
+   bool bearFVG;
+   bool demandActive;
+   bool supplyActive;
+   double demandLow;
+   double demandHigh;
+   double supplyLow;
+   double supplyHigh;
+   bool bullishEngulf;
+   bool bearishEngulf;
+   bool failedBreakUp;
+   bool failedBreakDown;
+   bool pocFound;
+   double pocLevel;
+   int pocTests;
+   bool expansionUp;
+   bool expansionDown;
+   bool rangeAcceptedUp;
+   bool rangeAcceptedDown;
+   bool bullRetest;
+   bool bearRetest;
+   bool bullVI;
+   bool bearVI;
+   bool bullIFVG;
+   bool bearIFVG;
+   bool bullEngulfFlip;
+   bool bearEngulfFlip;
+   double viLow;
+   double viHigh;
+   bool kissingCandle;
+   double kissingLevel;
+   bool supportTrendlineValid;
+   bool resistanceTrendlineValid;
+   bool supportTrendlineTouch;
+   bool resistanceTrendlineTouch;
+   double supportTrendlineNow;
+   double resistanceTrendlineNow;
+   bool bullQML;
+   bool bearQML;
+   double bullQMLLevel;
+   double bearQMLLevel;
+   bool bullInducement;
+   bool bearInducement;
+   double inducementPrice;
+   double dolPrice;
+   string dolName;
+   bool demandFlip;
+   bool supplyFlip;
+   bool mitigationDemand;
+   bool mitigationSupply;
+   int demandFreshness; // 0 fresh, 1 wick-tested, 2 body-tested, 3 broken
+   int supplyFreshness;
+   int demandMissedBars;
+   int supplyMissedBars;
+   bool liquiditySNR;
+   datetime lastClosedBar;
+};
+MAFrame g_maFrames[];
+int g_maFrameCount=0;
+datetime g_lastAnalysisLog=0;
+string MA_PREFIX="GA_MA_";
+string PA_PREFIX="GA_PA_VIS_";
+string g_paVisualSignature="";
+
+string MAStateText(int state)
+{
+   if(state==MA_STATE_BULL) return "BULLISH";
+   if(state==MA_STATE_BEAR) return "BEARISH";
+   if(state==MA_STATE_TRANSITION) return "TRANSITION";
+   if(state==MA_STATE_RANGE) return "RANGE/NEUTRAL";
+   return "INSUFFICIENT DATA";
+}
+
+bool MAIsPivotHigh(const MqlRates &r[],int i,int left,int right)
+{
+   double v=r[i].high;
+   for(int k=1;k<=left;k++) if(r[i+k].high>=v) return false;
+   for(int k=1;k<=right;k++) if(r[i-k].high>v) return false;
+   return true;
+}
+bool MAIsPivotLow(const MqlRates &r[],int i,int left,int right)
+{
+   double v=r[i].low;
+   for(int k=1;k<=left;k++) if(r[i+k].low<=v) return false;
+   for(int k=1;k<=right;k++) if(r[i-k].low<v) return false;
+   return true;
+}
+
+double MAATR(const MqlRates &r[],int count,int shift,int period)
+{
+   if(shift+period+1>=count || period<1) return 0.0;
+   double sum=0.0;
+   for(int i=shift;i<shift+period;i++)
+   {
+      double tr=MathMax(r[i].high-r[i].low,
+               MathMax(MathAbs(r[i].high-r[i+1].close),MathAbs(r[i].low-r[i+1].close)));
+      sum+=tr;
+   }
+   return sum/period;
+}
+
+void MAAddSwing(MASwing &swings[],int &n,datetime t,double price,bool high,bool major,string relation)
+{
+   if(n>0 && swings[n-1].time==t && swings[n-1].isHigh==high) return;
+   if(ArrayResize(swings,n+1)!=n+1) return;
+   swings[n].time=t; swings[n].price=price; swings[n].isHigh=high;
+   swings[n].isMajor=major; swings[n].relation=relation; n++;
+}
+
+string MACompare(double value,double previous,double tolerance,bool high)
+{
+   if(MathAbs(value-previous)<=tolerance) return high ? "EQH" : "EQL";
+   if(high) return value>previous ? "HH" : "LH";
+   return value>previous ? "HL" : "LL";
+}
+
+int MAFindFrame(string symbol,ENUM_TIMEFRAMES tf)
+{
+   for(int i=0;i<g_maFrameCount;i++)
+      if(g_maFrames[i].symbol==symbol && g_maFrames[i].tf==tf) return i;
+   return -1;
+}
+
+void MAStoreFrame(const MAFrame &f)
+{
+   int i=MAFindFrame(f.symbol,f.tf);
+   if(i<0)
+   {
+      i=g_maFrameCount;
+      if(ArrayResize(g_maFrames,g_maFrameCount+1)!=g_maFrameCount+1) return;
+      g_maFrameCount++;
+   }
+   g_maFrames[i]=f;
+}
+
+double MAPivotDeparture(const MqlRates &r[],int count,int index,bool high)
+{
+   double move=0.0;
+   int right=MathMax(1,Major_Swing_Right_Bars);
+   for(int k=1;k<=right && index-k>=0;k++)
+   {
+      double candidate=(high ? r[index].high-r[index-k].low : r[index-k].high-r[index].low);
+      if(candidate>move) move=candidate;
+   }
+   return move;
+}
+
+bool MAAnalyzeFrame(string symbol,ENUM_TIMEFRAMES tf,MAFrame &out)
+{
+   int cached=MAFindFrame(symbol,tf);
+   datetime newestClosed=iTime(symbol,tf,1);
+   if(cached>=0 && newestClosed>0 && g_maFrames[cached].lastClosedBar==newestClosed)
+   {out=g_maFrames[cached];return true;}
+   out.symbol=symbol; out.tf=tf; out.state=MA_STATE_INSUFFICIENT; out.score=0;
+   out.lastMajorHigh=0.0; out.lastMajorLow=0.0; out.majorHighTime=0; out.majorLowTime=0;
+   out.protectedHigh=0.0; out.protectedLow=0.0; out.protectedHighActive=false; out.protectedLowActive=false;
+   out.bullBOS=false; out.bearBOS=false; out.bullMSS=false; out.bearMSS=false;
+   out.rangeHigh=0.0; out.rangeLow=0.0; out.eq=0.0; out.q25=0.0; out.q75=0.0; out.rangePos=0; out.rangeValid=false;
+   out.bullSweep=false; out.bearSweep=false; out.bullFVG=false; out.bearFVG=false;
+   out.demandActive=false; out.supplyActive=false; out.demandLow=0.0; out.demandHigh=0.0; out.supplyLow=0.0; out.supplyHigh=0.0;
+   out.bullishEngulf=false; out.bearishEngulf=false; out.failedBreakUp=false; out.failedBreakDown=false;
+   out.pocFound=false; out.pocLevel=0.0; out.pocTests=0; out.expansionUp=false; out.expansionDown=false;
+   out.rangeAcceptedUp=false; out.rangeAcceptedDown=false; out.bullRetest=false; out.bearRetest=false;
+   out.bullVI=false; out.bearVI=false; out.bullIFVG=false; out.bearIFVG=false;
+   out.bullEngulfFlip=false; out.bearEngulfFlip=false; out.viLow=0.0; out.viHigh=0.0; out.kissingCandle=false; out.kissingLevel=0.0;
+   out.supportTrendlineValid=false; out.resistanceTrendlineValid=false; out.supportTrendlineTouch=false; out.resistanceTrendlineTouch=false;
+   out.supportTrendlineNow=0.0; out.resistanceTrendlineNow=0.0; out.bullQML=false; out.bearQML=false; out.bullQMLLevel=0.0; out.bearQMLLevel=0.0;
+   out.bullInducement=false; out.bearInducement=false; out.inducementPrice=0.0; out.dolPrice=0.0; out.dolName="NONE";
+   out.demandFlip=false; out.supplyFlip=false; out.mitigationDemand=false; out.mitigationSupply=false;
+   out.demandFreshness=0; out.supplyFreshness=0; out.demandMissedBars=0; out.supplyMissedBars=0; out.liquiditySNR=false; out.lastClosedBar=0;
+   MqlRates r[]; ArraySetAsSeries(r,true);
+   int need=MathMax(Bars_To_Check,150);
+   int copied=CopyRates(symbol,tf,0,need,r);
+   if(copied<MathMax(Major_Swing_Left_Bars+Major_Swing_Right_Bars+Average_Range_Period+10,60)) return false;
+   out.lastClosedBar=r[1].time;
+   MASwing major[]; MASwing minor[]; int majorN=0; int minorN=0;
+   double tol=MAATR(r,copied,1,Average_Range_Period)*Equal_High_Low_Tolerance;
+   int lastHighBar=-100000,lastLowBar=-100000;
+   for(int i=copied-1-Major_Swing_Right_Bars;i>=Major_Swing_Right_Bars;i--)
+   {
+      bool mh=MAIsPivotHigh(r,i,Major_Swing_Left_Bars,Major_Swing_Right_Bars);
+      bool ml=MAIsPivotLow(r,i,Major_Swing_Left_Bars,Major_Swing_Right_Bars);
+      bool nh=MAIsPivotHigh(r,i,Small_Swing_Left_Bars,Small_Swing_Right_Bars);
+      bool nl=MAIsPivotLow(r,i,Small_Swing_Left_Bars,Small_Swing_Right_Bars);
+      double atr=MAATR(r,copied,i,Average_Range_Period);
+      if(nh && i-lastHighBar>=Minimum_Bars_Between_Swings)
+      {
+         string rel="";
+         for(int z=minorN-1;z>=0;z--) if(minor[z].isHigh){rel=MACompare(r[i].high,minor[z].price,tol,true);break;}
+         MAAddSwing(minor,minorN,r[i].time,r[i].high,true,false,rel); lastHighBar=i;
+         bool majorFlag=(mh && atr>0.0 && MAPivotDeparture(r,copied,i,true)>=Minimum_Major_Swing_Size*atr);
+         if(majorFlag)
+         {
+            string mr=""; for(int z=majorN-1;z>=0;z--) if(major[z].isHigh){mr=MACompare(r[i].high,major[z].price,tol,true);break;}
+            MAAddSwing(major,majorN,r[i].time,r[i].high,true,true,mr);
+         }
+      }
+      if(nl && i-lastLowBar>=Minimum_Bars_Between_Swings)
+      {
+         string rel="";
+         for(int z=minorN-1;z>=0;z--) if(!minor[z].isHigh){rel=MACompare(r[i].low,minor[z].price,tol,false);break;}
+         MAAddSwing(minor,minorN,r[i].time,r[i].low,false,false,rel); lastLowBar=i;
+         bool majorFlag=(ml && atr>0.0 && MAPivotDeparture(r,copied,i,false)>=Minimum_Major_Swing_Size*atr);
+         if(majorFlag)
+         {
+            string mr=""; for(int z=majorN-1;z>=0;z--) if(!major[z].isHigh){mr=MACompare(r[i].low,major[z].price,tol,false);break;}
+            MAAddSwing(major,majorN,r[i].time,r[i].low,false,true,mr);
+         }
+      }
+   }
+   int hi1=-1,hi2=-1,lo1=-1,lo2=-1;
+   for(int z=majorN-1;z>=0;z--)
+   {
+      if(major[z].isHigh){if(hi1<0) hi1=z; else if(hi2<0){hi2=z;}}
+      else {if(lo1<0) lo1=z; else if(lo2<0){lo2=z;}}
+      if(hi2>=0 && lo2>=0) break;
+   }
+   if(hi1>=0){out.lastMajorHigh=major[hi1].price;out.majorHighTime=major[hi1].time;}
+   if(lo1>=0){out.lastMajorLow=major[lo1].price;out.majorLowTime=major[lo1].time;}
+   double buffer=MAATR(r,copied,1,Average_Range_Period)*Break_Confirmation_Buffer;
+   bool bullSeq=false,bearSeq=false;
+   if(hi1>=0 && hi2>=0 && lo1>=0 && lo2>=0)
+   {
+      string hs=MACompare(major[hi1].price,major[hi2].price,tol,true);
+      string ls=MACompare(major[lo1].price,major[lo2].price,tol,false);
+      bullSeq=(hs=="HH" && ls=="HL");
+      bearSeq=(hs=="LH" && ls=="LL");
+   }
+   // Reconstruct the latest historical major BOS from closed candles so protected swings persist.
+   int lastBullBreakBar=-1,lastBearBreakBar=-1;
+   int bullBrokenSwing=-1,bearBrokenSwing=-1;
+   for(int z=0;z<majorN;z++)
+   {
+      int swingBar=iBarShift(symbol,tf,major[z].time,false);
+      if(swingBar<2) continue;
+      for(int j=1;j<swingBar;j++)
+      {
+         if(major[z].isHigh && r[j+1].close<=major[z].price+buffer && r[j].close>major[z].price+buffer)
+         {
+            if(lastBullBreakBar<0 || j<lastBullBreakBar){lastBullBreakBar=j;bullBrokenSwing=z;}
+            break;
+         }
+         if(!major[z].isHigh && r[j+1].close>=major[z].price-buffer && r[j].close<major[z].price-buffer)
+         {
+            if(lastBearBreakBar<0 || j<lastBearBreakBar){lastBearBreakBar=j;bearBrokenSwing=z;}
+            break;
+         }
+      }
+   }
+   out.bullBOS=(lastBullBreakBar==1);
+   out.bearBOS=(lastBearBreakBar==1);
+   bool latestBullStructure=(lastBullBreakBar>=0 && (lastBearBreakBar<0 || lastBullBreakBar<lastBearBreakBar));
+   bool latestBearStructure=(lastBearBreakBar>=0 && (lastBullBreakBar<0 || lastBearBreakBar<lastBullBreakBar));
+   if(latestBullStructure && bullBrokenSwing>=0)
+   {
+      datetime breakTime=r[lastBullBreakBar].time;
+      for(int z=majorN-1;z>=0;z--)
+         if(!major[z].isHigh && major[z].time<breakTime)
+         {out.protectedLow=major[z].price;out.protectedLowActive=true;break;}
+   }
+   if(latestBearStructure && bearBrokenSwing>=0)
+   {
+      datetime breakTime=r[lastBearBreakBar].time;
+      for(int z=majorN-1;z>=0;z--)
+         if(major[z].isHigh && major[z].time<breakTime)
+         {out.protectedHigh=major[z].price;out.protectedHighActive=true;break;}
+   }
+   out.bullMSS=(latestBearStructure && out.protectedHighActive && r[1].close>out.protectedHigh+buffer && r[2].close<=out.protectedHigh+buffer);
+   out.bearMSS=(latestBullStructure && out.protectedLowActive && r[1].close<out.protectedLow-buffer && r[2].close>=out.protectedLow-buffer);
+   bool bullProtectedBroken=(out.protectedLowActive && r[1].close<out.protectedLow-buffer);
+   bool bearProtectedBroken=(out.protectedHighActive && r[1].close>out.protectedHigh+buffer);
+   if(out.bullMSS || out.bearMSS || bullProtectedBroken || bearProtectedBroken) out.state=MA_STATE_TRANSITION;
+   else if(latestBullStructure && !bullProtectedBroken) out.state=MA_STATE_BULL;
+   else if(latestBearStructure && !bearProtectedBroken) out.state=MA_STATE_BEAR;
+   else if(bullSeq) out.state=MA_STATE_BULL;
+   else if(bearSeq) out.state=MA_STATE_BEAR;
+   else out.state=MA_STATE_RANGE;
+   if(out.state==MA_STATE_BULL) out.score=(out.bullBOS || bullSeq ? 2 : 1);
+   else if(out.state==MA_STATE_BEAR) out.score=(out.bearBOS || bearSeq ? -2 : -1);
+   else out.score=0;
+   // Latest H4/HTF dealing-range candidate: latest confirmed major high and low.
+   if(hi1>=0 && lo1>=0 && out.lastMajorHigh>out.lastMajorLow)
+   {
+      out.rangeHigh=out.lastMajorHigh; out.rangeLow=out.lastMajorLow;
+      out.eq=(out.rangeHigh+out.rangeLow)*0.5;
+      out.q25=out.rangeLow+0.25*(out.rangeHigh-out.rangeLow);
+      out.q75=out.rangeLow+0.75*(out.rangeHigh-out.rangeLow);
+      out.rangeValid=true;
+      double pos=(r[1].close-out.rangeLow)/(out.rangeHigh-out.rangeLow);
+      if(pos<0.0) out.rangePos=-1; else if(pos<0.25) out.rangePos=1;
+      else if(pos<0.50) out.rangePos=2; else if(pos<0.75) out.rangePos=3;
+      else if(pos<=1.0) out.rangePos=4; else out.rangePos=5;
+   }
+   // Liquidity sweep/reclaim on latest closed candle against prior major boundaries.
+   if(out.lastMajorLow>0.0) out.bullSweep=(r[1].low<out.lastMajorLow-buffer && r[1].close>out.lastMajorLow);
+   if(out.lastMajorHigh>0.0) out.bearSweep=(r[1].high>out.lastMajorHigh+buffer && r[1].close<out.lastMajorHigh);
+   // FVG lifecycle snapshot: latest closed three-candle imbalance not yet fully traversed.
+   for(int i=2;i<MathMin(copied-2,Bars_To_Find_Recent_Patterns+2);i++)
+   {
+      if(r[i+2].high<r[i].low) {if(r[1].low<=r[i].low && r[1].high>=r[i+2].high) out.bullFVG=true;}
+      if(r[i+2].low>r[i].high) {if(r[1].high>=r[i].high && r[1].low<=r[i+2].low) out.bearFVG=true;}
+   }
+   // Engulfing is body-to-body and uses only closed candles.
+   double pBodyHi=MathMax(r[2].open,r[2].close),pBodyLo=MathMin(r[2].open,r[2].close);
+   double cBodyHi=MathMax(r[1].open,r[1].close),cBodyLo=MathMin(r[1].open,r[1].close);
+   out.bullishEngulf=(r[1].close>r[1].open && r[2].close<r[2].open && cBodyHi>=pBodyHi && cBodyLo<=pBodyLo);
+   out.bearishEngulf=(r[1].close<r[1].open && r[2].close>r[2].open && cBodyHi>=pBodyHi && cBodyLo<=pBodyLo);
+   // Failed break/reclaim of most recent major boundaries.
+   out.failedBreakUp=(out.lastMajorHigh>0.0 && r[1].high>out.lastMajorHigh+buffer && r[1].close<out.lastMajorHigh);
+   out.failedBreakDown=(out.lastMajorLow>0.0 && r[1].low<out.lastMajorLow-buffer && r[1].close>out.lastMajorLow);
+   // Range expansion is a close beyond a boundary; not a wick-only event.
+   out.expansionUp=(out.rangeValid && r[1].close>out.rangeHigh+buffer);
+   out.expansionDown=(out.rangeValid && r[1].close<out.rangeLow-buffer);
+   // Price Control Zone: cluster repeated approaches around a historic key close.
+   // A candidate needs multiple touches and multiple failures to hold a close beyond it.
+   double symPoint=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double pocTol=MathMax(symPoint*Key_Level_Tolerance_Points,tol);
+   int bestTests=0; double bestLevel=0.0;
+   int scanLimit=MathMin(copied-2,MathMax(30,Bars_To_Find_Recent_Patterns*8));
+   for(int a=2;a<scanLimit;a++)
+   {
+      double candidate=r[a].close; int touches=0; int failed=0;
+      for(int b=1;b<scanLimit;b++)
+      {
+         bool intersects=(r[b].low<=candidate+pocTol && r[b].high>=candidate-pocTol);
+         if(intersects)
+         {
+            touches++;
+            if((r[b].close<candidate-pocTol && r[b].high>candidate+pocTol) ||
+               (r[b].close>candidate+pocTol && r[b].low<candidate-pocTol)) failed++;
+         }
+      }
+      if(touches>=Minimum_Rejections_For_Key_Level && failed>=1 && touches>bestTests)
+      {bestTests=touches;bestLevel=candidate;}
+   }
+   if(bestTests>=Minimum_Rejections_For_Key_Level){out.pocFound=true;out.pocLevel=bestLevel;out.pocTests=bestTests;}
+
+   // Supply/demand origins are tied to a confirmed structural break, not arbitrary candles.
+   if(lastBullBreakBar>=1 && lastBullBreakBar<=Bars_To_Find_Recent_Patterns)
+      for(int i=lastBullBreakBar+1;i<MathMin(copied,lastBullBreakBar+Bars_To_Find_Recent_Patterns+2);i++)
+         if(r[i].close<r[i].open){out.demandLow=r[i].low;out.demandHigh=r[i].open;out.demandActive=true;break;}
+   if(lastBearBreakBar>=1 && lastBearBreakBar<=Bars_To_Find_Recent_Patterns)
+      for(int i=lastBearBreakBar+1;i<MathMin(copied,lastBearBreakBar+Bars_To_Find_Recent_Patterns+2);i++)
+         if(r[i].close>r[i].open){out.supplyLow=r[i].open;out.supplyHigh=r[i].high;out.supplyActive=true;break;}
+
+   // Range expansion is accepted only after a second closed candle holds outside the range.
+   if(out.rangeValid && copied>3)
+   {
+      out.rangeAcceptedUp=(r[1].close>out.rangeHigh+buffer && r[2].close>out.rangeHigh+buffer);
+      out.rangeAcceptedDown=(r[1].close<out.rangeLow-buffer && r[2].close<out.rangeLow-buffer);
+   }
+
+   // FVG retest: latest close returns to a previously broken imbalance boundary and holds beyond it.
+   for(int i=3;i<MathMin(copied-2,Bars_To_Find_Recent_Patterns+8);i++)
+   {
+      if(r[i+2].high<r[i].low)
+      {
+         double zl=r[i+2].high, zh=r[i].low;
+         bool priorBreak=false;
+         for(int j=i-1;j>=2;j--) if(r[j].close>zh+buffer){priorBreak=true;break;}
+         if(priorBreak && r[1].low<=zh+pocTol && r[1].high>=zl-pocTol && r[1].close>zh) out.bullRetest=true;
+      }
+      if(r[i+2].low>r[i].high)
+      {
+         double zl=r[i].high, zh=r[i+2].low;
+         bool priorBreak=false;
+         for(int j=i-1;j>=2;j--) if(r[j].close<zl-buffer){priorBreak=true;break;}
+         if(priorBreak && r[1].high>=zl-pocTol && r[1].low<=zh+pocTol && r[1].close<zl) out.bearRetest=true;
+         bool inverted=false;
+         for(int j=i-1;j>=2;j--) if(r[j].close>zh+buffer){inverted=true;break;}
+         if(inverted && r[1].low<=zh+pocTol && r[1].high>=zl-pocTol && r[1].close>zh) out.bullIFVG=true;
+      }
+      if(r[i+2].high<r[i].low)
+      {
+         double zl=r[i+2].high, zh=r[i].low;
+         bool inverted=false;
+         for(int j=i-1;j>=2;j--) if(r[j].close<zl-buffer){inverted=true;break;}
+         if(inverted && r[1].high>=zl-pocTol && r[1].low<=zh+pocTol && r[1].close<zl) out.bearIFVG=true;
+      }
+   }
+
+   // Volume Imbalance (VI): two-candle open/close separation as defined in the trading plan.
+   // It is kept separate from the three-candle wick-based FVG.
+   if(copied>3)
+   {
+      if(r[1].close>r[2].open && r[1].low>r[2].high)
+      {out.bullVI=true;out.viLow=r[2].high;out.viHigh=r[1].low;}
+      else if(r[1].close<r[2].open && r[1].high<r[2].low)
+      {out.bearVI=true;out.viLow=r[1].high;out.viHigh=r[2].low;}
+   }
+
+   // Kissing candle / gap-bar SNR: preserve the first candle's close as the level.
+   // This is a candidate, not an assertion that every gap is a valid HTF decision level.
+   if(PeriodSeconds(tf)>=PeriodSeconds(PERIOD_H1))
+   {
+      bool gapUp=(r[1].low>r[2].high);
+      bool gapDown=(r[1].high<r[2].low);
+      if(gapUp || gapDown){out.kissingCandle=true;out.kissingLevel=r[2].close;}
+   }
+
+   // Trendlines: use the two latest confirmed major lows/highs; require a third
+   // touch without a closed candle breaking the line.
+   int lowA=-1,lowB=-1,highA=-1,highB=-1;
+   for(int z=majorN-1;z>=0;z--)
+   {
+      if(!major[z].isHigh){if(lowA<0)lowA=z;else if(lowB<0)lowB=z;}
+      else {if(highA<0)highA=z;else if(highB<0)highB=z;}
+      if(lowB>=0 && highB>=0)break;
+   }
+   if(lowA>=0 && lowB>=0 && major[lowA].price>major[lowB].price)
+   {
+      int a=iBarShift(symbol,tf,major[lowB].time,false),b=iBarShift(symbol,tf,major[lowA].time,false);
+      if(a>b && b>=1)
+      {
+         double lineNow=major[lowB].price+(major[lowA].price-major[lowB].price)*(double)(a-1)/(double)(a-b);
+         bool touched=false,broken=false;
+         for(int j=a-1;j>=1;j--)
+         {
+            double lv=major[lowB].price+(major[lowA].price-major[lowB].price)*(double)(a-j)/(double)(a-b);
+            if(j<b) continue;
+            if(r[j].low<=lv+pocTol && r[j].high>=lv-pocTol) touched=true;
+            if(r[j].close<lv-buffer) broken=true;
+         }
+         out.supportTrendlineValid=(touched && !broken);out.supportTrendlineTouch=(r[1].low<=lineNow+pocTol && r[1].high>=lineNow-pocTol);
+         out.supportTrendlineNow=lineNow;
+      }
+   }
+   if(highA>=0 && highB>=0 && major[highA].price<major[highB].price)
+   {
+      int a=iBarShift(symbol,tf,major[highB].time,false),b=iBarShift(symbol,tf,major[highA].time,false);
+      if(a>b && b>=1)
+      {
+         double lineNow=major[highB].price+(major[highA].price-major[highB].price)*(double)(a-1)/(double)(a-b);
+         bool touched=false,broken=false;
+         for(int j=a-1;j>=1;j--)
+         {
+            double lv=major[highB].price+(major[highA].price-major[highB].price)*(double)(a-j)/(double)(a-b);
+            if(j<b) continue;
+            if(r[j].high>=lv-pocTol && r[j].low<=lv+pocTol) touched=true;
+            if(r[j].close>lv+buffer) broken=true;
+         }
+         out.resistanceTrendlineValid=(touched && !broken);out.resistanceTrendlineTouch=(r[1].high>=lineNow-pocTol && r[1].low<=lineNow+pocTol);
+         out.resistanceTrendlineNow=lineNow;
+      }
+   }
+
+   // QML candidates: H&S-style five-pivot structure, with the required engulfing
+   // confirmation on the latest closed candle. The right shoulder is the level.
+   if(majorN>=5)
+   {
+      MASwing p0=major[majorN-5],p1=major[majorN-4],p2=major[majorN-3],p3=major[majorN-2],p4=major[majorN-1];
+      if(p0.isHigh && !p1.isHigh && p2.isHigh && !p3.isHigh && p4.isHigh)
+      {
+         bool shoulders=MathAbs(p0.price-p4.price)<=MathMax(tol,(p2.price-p1.price)*0.25);
+         if(p2.price>p0.price+tol && p2.price>p4.price+tol && shoulders && out.bearishEngulf)
+         {out.bearQML=true;out.bearQMLLevel=p4.price;}
+      }
+      if(!p0.isHigh && p1.isHigh && !p2.isHigh && p3.isHigh && !p4.isHigh)
+      {
+         bool shoulders=MathAbs(p0.price-p4.price)<=MathMax(tol,(p1.price-p2.price)*0.25);
+         if(p2.price<p0.price-tol && p2.price<p4.price-tol && shoulders && out.bullishEngulf)
+         {out.bullQML=true;out.bullQMLLevel=p4.price;}
+      }
+   }
+
+   // DOL and inducement candidates. DOL is a target hypothesis, not a direction signal.
+   if(out.rangeValid)
+   {
+      if(out.state==MA_STATE_BULL || (out.state==MA_STATE_RANGE && r[1].close<out.eq))
+      {out.dolPrice=out.rangeHigh;out.dolName="ERL HIGH";}
+      else if(out.state==MA_STATE_BEAR || (out.state==MA_STATE_RANGE && r[1].close>=out.eq))
+      {out.dolPrice=out.rangeLow;out.dolName="ERL LOW";}
+      if(out.dolPrice>0.0)
+      {
+         for(int z=minorN-1;z>=0;z--)
+         {
+            if(out.dolName=="ERL HIGH" && !minor[z].isHigh && minor[z].time<r[1].time)
+            {out.bullInducement=true;out.inducementPrice=minor[z].price;break;}
+            if(out.dolName=="ERL LOW" && minor[z].isHigh && minor[z].time<r[1].time)
+            {out.bearInducement=true;out.inducementPrice=minor[z].price;break;}
+         }
+      }
+   }
+
+   // SNR lifecycle for the active origin zones. Wick/body contact is recorded separately;
+   // a close beyond the far edge marks the zone broken. Missed bars count untouched closes.
+   if(out.demandActive)
+   {
+      for(int j=1;j<MathMin(copied,Bars_To_Find_Recent_Patterns+12);j++)
+      {
+         bool wick=(r[j].low<=out.demandHigh && r[j].high>=out.demandLow);
+         bool body=(MathMax(r[j].open,r[j].close)>=out.demandLow && MathMin(r[j].open,r[j].close)<=out.demandHigh);
+         if(r[j].close<out.demandLow-buffer){out.demandFreshness=3;break;}
+         if(body){out.demandFreshness=2;break;}
+         if(wick){out.demandFreshness=1;break;}
+         out.demandMissedBars++;
+      }
+      out.mitigationDemand=(r[1].low<=out.demandHigh && r[1].high>=out.demandLow && r[1].close>out.demandHigh);
+      out.supplyFlip=(r[2].close<out.demandLow && r[1].high>=out.demandLow && r[1].close<out.demandLow);
+   }
+   if(out.supplyActive)
+   {
+      for(int j=1;j<MathMin(copied,Bars_To_Find_Recent_Patterns+12);j++)
+      {
+         bool wick=(r[j].high>=out.supplyLow && r[j].low<=out.supplyHigh);
+         bool body=(MathMax(r[j].open,r[j].close)>=out.supplyLow && MathMin(r[j].open,r[j].close)<=out.supplyHigh);
+         if(r[j].close>out.supplyHigh+buffer){out.supplyFreshness=3;break;}
+         if(body){out.supplyFreshness=2;break;}
+         if(wick){out.supplyFreshness=1;break;}
+         out.supplyMissedBars++;
+      }
+      out.mitigationSupply=(r[1].high>=out.supplyLow && r[1].low<=out.supplyHigh && r[1].close<out.supplyLow);
+      out.demandFlip=(r[2].close>out.supplyHigh && r[1].low<=out.supplyHigh && r[1].close>out.supplyHigh);
+   }
+
+   // Failed-engulfing SNR flips: the engulfed candle close becomes the decision level.
+   for(int i=3;i<MathMin(copied-1,Bars_To_Find_Recent_Patterns+20);i++)
+   {
+      double level=r[i+1].close;
+      bool priorBullBreak=false,priorBearBreak=false;
+      for(int j=i-1;j>=2;j--)
+      {
+         if(r[j].close>level+buffer) priorBullBreak=true;
+         if(r[j].close<level-buffer) priorBearBreak=true;
+      }
+      if(priorBullBreak && r[1].low<=level+pocTol && r[1].close>level) out.bullEngulfFlip=true;
+      if(priorBearBreak && r[1].high>=level-pocTol && r[1].close<level) out.bearEngulfFlip=true;
+   }
+
+   // Failed engulfing-bar SNR: the level is the engulfed candle's close.
+   // A sweep at that level plus close back inside the previous candle is LS + SNR.
+   if(out.bullishEngulf || out.bearishEngulf)
+   {
+      double snr=(out.bullishEngulf ? r[2].close : r[2].close);
+      out.liquiditySNR=((r[1].high>r[2].high && r[1].close<r[2].high) ||
+                        (r[1].low<r[2].low && r[1].close>r[2].low));
+      if(snr>0.0) out.kissingLevel=(out.kissingCandle ? out.kissingLevel : snr);
+   }
+   return true;
+}
+
+int MAFrameScore(string symbol,ENUM_TIMEFRAMES tf)
+{
+   int i=MAFindFrame(symbol,tf); return (i>=0 ? g_maFrames[i].score : 0);
+}
+
+string MARangeLocation(int pos)
+{
+   if(pos<0) return "BELOW RANGE";
+   if(pos==1) return "LOWER QUARTER";
+   if(pos==2) return "DISCOUNT";
+   if(pos==3) return "PREMIUM";
+   if(pos==4) return "UPPER QUARTER";
+   if(pos==5) return "ABOVE RANGE";
+   return "UNKNOWN";
+}
+
+int MAWeightedBias(string symbol,double &normalised,string &conflict)
+{
+   int w=MAFindFrame(symbol,PERIOD_W1);
+   int d=MAFindFrame(symbol,PERIOD_D1);
+   int h=MAFindFrame(symbol,PERIOD_H4);
+   int intraday=-1;
+   // The chart timeframe is the local refinement when it is below H4.
+   ENUM_TIMEFRAMES chartTf=(ENUM_TIMEFRAMES)Period();
+   if(PeriodSeconds(chartTf)<PeriodSeconds(PERIOD_H4)) intraday=MAFindFrame(symbol,chartTf);
+   double total=0.0,used=0.0;
+   if(w>=0){total+=0.40*g_maFrames[w].score;used+=0.40;}
+   if(d>=0){total+=0.30*g_maFrames[d].score;used+=0.30;}
+   if(h>=0){total+=0.20*g_maFrames[h].score;used+=0.20;}
+   if(intraday>=0 && intraday!=w && intraday!=d && intraday!=h){total+=0.10*g_maFrames[intraday].score;used+=0.10;}
+   normalised=(used>0.0 ? total/used : 0.0);
+   conflict="";
+   if(w>=0 && d>=0 && g_maFrames[w].score*g_maFrames[d].score<0) conflict="W1 vs D1";
+   if(d>=0 && h>=0 && g_maFrames[d].score*g_maFrames[h].score<0)
+      conflict+=(conflict=="" ? "D1 vs H4" : "; D1 vs H4");
+   if(h>=0 && intraday>=0 && g_maFrames[h].score*g_maFrames[intraday].score<0)
+      conflict+=(conflict=="" ? "H4 vs LTF" : "; H4 vs LTF");
+   if(normalised>=0.75) return MA_STATE_BULL;
+   if(normalised<=-0.75) return MA_STATE_BEAR;
+   if(normalised>=0.25 || normalised<=-0.25) return MA_STATE_TRANSITION;
+   return MA_STATE_RANGE;
+}
+
+string MAFreshnessText(int state)
+{
+   if(state==1) return "WICK-TESTED";
+   if(state==2) return "FRESH AGAIN (BODY)";
+   if(state==3) return "BROKEN";
+   return "FRESH/UNTOUCHED";
+}
+
+void MADrawLevel(string suffix,double price,color clr,ENUM_LINE_STYLE style)
+{
+   string name=MA_PREFIX+suffix;
+   if(price<=0.0){ObjectDelete(0,name);return;}
+   if(ObjectFind(0,name)<0) ObjectCreate(0,name,OBJ_HLINE,0,0,price);
+   ObjectSetDouble(0,name,OBJPROP_PRICE,price);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+   ObjectSetInteger(0,name,OBJPROP_STYLE,style);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,name,OBJPROP_BACK,true);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+}
+
+// MT5 text labels cannot show line breaks, so a multi-line text block is
+// drawn as one label per line (and stale lines are removed).
+void DrawTextBlock(string baseName,string text,int x,int y,int lineHeight,
+                   int fontSize,color clr,string font,
+                   ENUM_BASE_CORNER corner,ENUM_ANCHOR_POINT anchor,
+                   bool bottomAlign)
+{
+   string lines[];
+   int n=StringSplit(text,'\n',lines);
+
+   if(n<=0)
+      return;
+
+   if(bottomAlign)
+   {
+      int chartH=(int)ChartGetInteger(0,CHART_HEIGHT_IN_PIXELS);
+      y=MathMax(20,chartH-(n*lineHeight)-30);
+   }
+
+   ObjectDelete(0,baseName);   // old single-label version
+
+   for(int k=0;k<n;k++)
+   {
+      string name=baseName+"_L"+IntegerToString(k);
+
+      if(ObjectFind(0,name)<0)
+         if(!ObjectCreate(0,name,OBJ_LABEL,0,0,0))
+            continue;
+
+      ObjectSetInteger(0,name,OBJPROP_CORNER,corner);
+      ObjectSetInteger(0,name,OBJPROP_ANCHOR,anchor);
+      ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
+      ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y+(k*lineHeight));
+      ObjectSetInteger(0,name,OBJPROP_FONTSIZE,fontSize);
+      ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+      ObjectSetString(0,name,OBJPROP_FONT,font);
+      ObjectSetString(0,name,OBJPROP_TEXT,lines[k]);
+      ObjectSetInteger(0,name,OBJPROP_BACK,false);
+      ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+      ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+   }
+
+   // Remove lines left over from a longer previous text.
+   for(int k=n;k<80;k++)
+   {
+      string name=baseName+"_L"+IntegerToString(k);
+
+      if(ObjectFind(0,name)<0)
+         break;
+
+      ObjectDelete(0,name);
+   }
+}
+
+void MADrawPanel()
+{
+   if(!Show_Analysis_Summary || !Show_Market_Analysis) {ObjectsDeleteAll(0,MA_PREFIX+"PANEL");return;}
+   int h4=MAFindFrame(Symbol(),PERIOD_H4),d1=MAFindFrame(Symbol(),PERIOD_D1),w1=MAFindFrame(Symbol(),PERIOD_W1);
+   if(h4<0 && d1<0 && w1<0) return;
+   string text="GLORYALGO | MARKET ANALYSIS\n";
+   double biasValue=0.0; string conflict="";
+   int biasState=MAWeightedBias(Symbol(),biasValue,conflict);
+   text+="WEIGHTED BIAS  "+MAStateText(biasState)+" ("+DoubleToString(biasValue,2)+")\n";
+   if(conflict!="") text+="CONFLICT  "+conflict+"\n";
+   if(w1>=0) text+="W1  "+MAStateText(g_maFrames[w1].state)+"\n";
+   if(d1>=0) text+="D1  "+MAStateText(g_maFrames[d1].state)+"\n";
+   if(h4>=0)
+   {
+      MAFrame f=g_maFrames[h4];
+      text+="H4  "+MAStateText(f.state)+"\n";
+      text+="RANGE  "+(f.rangeValid ? MARangeLocation(f.rangePos) : "NO VALID RANGE")+"\n";
+      if(f.rangeValid) text+="EQ  "+DoubleToString(f.eq,_Digits)+"  Q25 "+DoubleToString(f.q25,_Digits)+"  Q75 "+DoubleToString(f.q75,_Digits)+"\n";
+      text+="PROTECTED LOW  "+(f.protectedLowActive ? DoubleToString(f.protectedLow,_Digits) : "N/A")+"\n";
+      text+="PROTECTED HIGH "+(f.protectedHighActive ? DoubleToString(f.protectedHigh,_Digits) : "N/A")+"\n";
+      text+="LIQ SWEEP  "+(f.bullSweep ? "SELL-SIDE RECLAIM" : (f.bearSweep ? "BUY-SIDE RECLAIM" : "NONE"))+"\n";
+      text+="PA  "+(f.bullishEngulf ? "BULL ENGULF " : "")+(f.bearishEngulf ? "BEAR ENGULF " : "")+(f.failedBreakUp ? "FAILED HIGH " : "")+(f.failedBreakDown ? "FAILED LOW " : "")+"\n";
+      text+="FVG  "+(f.bullFVG ? "BULL " : "")+(f.bearFVG ? "BEAR" : (f.bullFVG ? "" : "NONE"))+"  IFVG "+(f.bullIFVG ? "BULL" : (f.bearIFVG ? "BEAR" : "NONE"))+"\n";
+      text+="POC ZONE  "+(f.pocFound ? DoubleToString(f.pocLevel,_Digits)+" ("+IntegerToString(f.pocTests)+" tests)" : "NOT CONFIRMED")+"\n";
+      text+="DEMAND  "+(f.demandActive ? DoubleToString(f.demandLow,_Digits)+" - "+DoubleToString(f.demandHigh,_Digits) : "NONE")+"\n";
+      text+="SUPPLY  "+(f.supplyActive ? DoubleToString(f.supplyLow,_Digits)+" - "+DoubleToString(f.supplyHigh,_Digits) : "NONE")+"\n";
+      text+="EXPANSION  "+(f.rangeAcceptedUp ? "ACCEPTED UP" : (f.rangeAcceptedDown ? "ACCEPTED DOWN" : (f.expansionUp ? "UP CANDIDATE" : (f.expansionDown ? "DOWN CANDIDATE" : "NONE"))))+"\n";
+      text+="DOL  "+f.dolName+(f.dolPrice>0.0 ? " @ "+DoubleToString(f.dolPrice,_Digits) : "")+"\n";
+      text+="IDM  "+(f.bullInducement ? "BULL "+DoubleToString(f.inducementPrice,_Digits) : (f.bearInducement ? "BEAR "+DoubleToString(f.inducementPrice,_Digits) : "NONE"))+"\n";
+      text+="RETEST  "+(f.bullRetest ? "BULL " : "")+(f.bearRetest ? "BEAR" : (f.bullRetest ? "" : "NONE"))+"\n";
+      text+="VI  "+(f.bullVI ? "BULL" : (f.bearVI ? "BEAR" : "NONE"))+"  KISSING "+(f.kissingCandle ? DoubleToString(f.kissingLevel,_Digits) : "NONE")+"\n";
+      text+="TRENDLINE  "+(f.supportTrendlineValid ? "SUPPORT" : "")+(f.resistanceTrendlineValid ? " RESISTANCE" : (f.supportTrendlineValid ? "" : "NONE"))+"\n";
+      text+="QML  "+(f.bullQML ? "BULL" : (f.bearQML ? "BEAR" : "NONE"))+"  ENGULF FLIP "+(f.bullEngulfFlip ? "BULL" : (f.bearEngulfFlip ? "BEAR" : "NONE"))+"\n";
+      text+="LS+SNR  "+(f.liquiditySNR ? "YES" : "NO")+"  STRONG/WEAK "+(f.state==MA_STATE_BULL ? "LOW/HIGH" : (f.state==MA_STATE_BEAR ? "HIGH/LOW" : "UNSET"))+"\n";
+      text+="ZONE FLIP  "+(f.demandFlip ? "DEMAND" : (f.supplyFlip ? "SUPPLY" : "NONE"))+"  MITIGATION "+(f.mitigationDemand ? "DEMAND" : (f.mitigationSupply ? "SUPPLY" : "NONE"))+"\n";
+      text+="SNR STATE  D:"+MAFreshnessText(f.demandFreshness)+" (miss "+IntegerToString(f.demandMissedBars)+")  S:"+MAFreshnessText(f.supplyFreshness)+" (miss "+IntegerToString(f.supplyMissedBars)+")\n";
+      text+="TREND TOUCH  "+(f.supportTrendlineTouch ? "SUPPORT" : "")+(f.resistanceTrendlineTouch ? " RESISTANCE" : (f.supportTrendlineTouch ? "" : "NONE"))+"\n";
+      if(Show_Analysis_Price_Levels)
+      {
+         MADrawLevel("DOL",f.dolPrice,InpBearColor,STYLE_DASH);
+         MADrawLevel("IDM",f.inducementPrice,InpMutedTextColor,STYLE_DOT);
+         MADrawLevel("PCZ",(f.pocFound ? f.pocLevel : 0.0),InpInkColor,STYLE_DASHDOT);
+         MADrawLevel("KISSING",(f.kissingCandle ? f.kissingLevel : 0.0),InpBullColor,STYLE_DOT);
+         MADrawLevel("VI_HIGH",((f.bullVI || f.bearVI) ? f.viHigh : 0.0),InpBearColor,STYLE_DOT);
+         MADrawLevel("VI_LOW",((f.bullVI || f.bearVI) ? f.viLow : 0.0),InpBullColor,STYLE_DOT);
+         MADrawLevel("DEMAND_LOW",(f.demandActive ? f.demandLow : 0.0),InpBullColor,STYLE_SOLID);
+         MADrawLevel("DEMAND_HIGH",(f.demandActive ? f.demandHigh : 0.0),InpBullColor,STYLE_DASH);
+         MADrawLevel("SUPPLY_LOW",(f.supplyActive ? f.supplyLow : 0.0),InpBearColor,STYLE_DASH);
+         MADrawLevel("SUPPLY_HIGH",(f.supplyActive ? f.supplyHigh : 0.0),InpBearColor,STYLE_SOLID);
+         MADrawLevel("SUPPORT_TL",(f.supportTrendlineValid ? f.supportTrendlineNow : 0.0),InpBullColor,STYLE_DASHDOT);
+         MADrawLevel("RESIST_TL",(f.resistanceTrendlineValid ? f.resistanceTrendlineNow : 0.0),InpBearColor,STYLE_DASHDOT);
+         MADrawLevel("QML",(f.bullQML ? f.bullQMLLevel : (f.bearQML ? f.bearQMLLevel : 0.0)),InpInkColor,STYLE_DASH);
+      }
+      else ObjectsDeleteAll(0,MA_PREFIX);
+      if(Show_Analysis_Price_Levels && f.rangeValid)
+      {
+         double levels[5]; levels[0]=f.rangeHigh; levels[1]=f.q75; levels[2]=f.eq; levels[3]=f.q25; levels[4]=f.rangeLow;
+         string suffix[5]={"RH","Q75","EQ","Q25","RL"};
+         for(int q=0;q<5;q++)
+         {
+            string ln=MA_PREFIX+suffix[q];
+            if(ObjectFind(0,ln)<0) ObjectCreate(0,ln,OBJ_HLINE,0,0,levels[q]);
+            ObjectSetDouble(0,ln,OBJPROP_PRICE,levels[q]);
+            ObjectSetInteger(0,ln,OBJPROP_COLOR,(q==0 || q==4 ? InpMutedTextColor : InpBorderColor));
+            ObjectSetInteger(0,ln,OBJPROP_STYLE,(q==2 ? STYLE_DASH : STYLE_DOT));
+            ObjectSetInteger(0,ln,OBJPROP_WIDTH,(q==2 ? 1 : 1));
+            ObjectSetInteger(0,ln,OBJPROP_BACK,true);
+            ObjectSetInteger(0,ln,OBJPROP_SELECTABLE,false);
+         }
+      }
+   }
+   DrawTextBlock(MA_PREFIX+"PANEL",text,12,0,13,8,InpInkColor,"Consolas",
+                 CORNER_LEFT_UPPER,ANCHOR_LEFT_UPPER,true);
+}
+
+//------------------------- PRICE ACTION CHART VISUALS --------------//
+// These objects are display-only. They read the MAFrame results and do not
+// participate in CRT/CISD validation, setup qualification or setup scoring.
+
+string PATFCode(ENUM_TIMEFRAMES tf)
+{
+   return TimeframeName(tf);
+}
+
+string PAObjectKey(string tf,string feature,datetime stamp)
+{
+   return PA_PREFIX+tf+"_"+feature+"_"+IntegerToString((long)stamp);
+}
+
+void PADrawText(string name,datetime when,double price,string caption,color clr,int size)
+{
+   if(when<=0 || price<=0.0 || caption=="") return;
+   if(ObjectFind(0,name)<0)
+      if(!ObjectCreate(0,name,OBJ_TEXT,0,when,price)) return;
+   ObjectMove(0,name,0,when,price);
+   ObjectSetString(0,name,OBJPROP_TEXT,caption);
+   ObjectSetString(0,name,OBJPROP_FONT,"Arial");
+   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,size);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+   ObjectSetInteger(0,name,OBJPROP_ANCHOR,ANCHOR_LEFT_LOWER);
+   ObjectSetInteger(0,name,OBJPROP_BACK,false);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+}
+
+void PADrawHLine(string name,double price,string caption,color clr,ENUM_LINE_STYLE style)
+{
+   if(price<=0.0) {ObjectDelete(0,name);return;}
+   if(ObjectFind(0,name)<0)
+      if(!ObjectCreate(0,name,OBJ_HLINE,0,0,price)) return;
+   ObjectSetDouble(0,name,OBJPROP_PRICE,price);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+   ObjectSetInteger(0,name,OBJPROP_STYLE,style);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,name,OBJPROP_BACK,true);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+   ObjectSetString(0,name,OBJPROP_TEXT,caption);
+}
+
+void PADrawZone(string name,datetime leftTime,datetime rightTime,
+                double low,double high,string caption,color clr)
+{
+   if(leftTime<=0 || rightTime<=leftTime || low<=0.0 || high<=low)
+   {ObjectDelete(0,name);return;}
+   if(ObjectFind(0,name)<0)
+      if(!ObjectCreate(0,name,OBJ_RECTANGLE,0,leftTime,high,rightTime,low)) return;
+   ObjectMove(0,name,0,leftTime,high);
+   ObjectMove(0,name,1,rightTime,low);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+   ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_SOLID);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,name,OBJPROP_FILL,true);
+   ObjectSetInteger(0,name,OBJPROP_BACK,true);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+   ObjectSetString(0,name,OBJPROP_TEXT,caption);
+}
+
+string PAStatus(bool checked,bool detected)
+{
+   if(!checked) return "NOT CHECKED";
+   return (detected ? "DETECTED" : "NOT FOUND");
+}
+
+void PADrawHistoricalSwings(ENUM_TIMEFRAMES tf)
+{
+   if(!Show_Major_Swings && !Show_Small_Swings) return;
+   int bars=MathMax(80,History_Bars_To_Show);
+   MqlRates r[];
+   ArraySetAsSeries(r,true);
+   int copied=CopyRates(Symbol(),tf,0,bars,r);
+   if(copied<MathMax(Major_Swing_Left_Bars+Major_Swing_Right_Bars+10,40)) return;
+
+   // Rebuild only this timeframe's bounded swing-label history. This prevents
+   // old labels from accumulating as new candles arrive.
+   string swingPrefix=PA_PREFIX+PATFCode(tf)+"_MAJ";
+   string minorPrefix=PA_PREFIX+PATFCode(tf)+"_MIN";
+   for(int obj=ObjectsTotal(0,0,-1)-1;obj>=0;obj--)
+   {
+      string objectName=ObjectName(0,obj,0,-1);
+      if(StringFind(objectName,swingPrefix)==0 || StringFind(objectName,minorPrefix)==0)
+         ObjectDelete(0,objectName);
+   }
+
+   double previousMajorHigh=0.0,previousMajorLow=0.0;
+   double previousMinorHigh=0.0,previousMinorLow=0.0;
+   int majorDrawn=0,minorDrawn=0;
+   int lastMajorHighBar=-100000,lastMajorLowBar=-100000;
+   int lastMinorHighBar=-100000,lastMinorLowBar=-100000;
+   double atr=MAATR(r,copied,1,Average_Range_Period);
+   double tolerance=MathMax(SymbolInfoDouble(Symbol(),SYMBOL_POINT)*2.0,
+                            atr*Equal_High_Low_Tolerance);
+   int oldest=copied-MathMax(Major_Swing_Left_Bars,Small_Swing_Left_Bars)-1;
+   int newest=MathMax(Major_Swing_Right_Bars,Small_Swing_Right_Bars)+1;
+
+   // Iterate from older bars to newer bars so each label compares with the
+   // previous confirmed pivot of the same type.
+   for(int i=oldest;i>=newest;i--)
+   {
+      if(Show_Major_Swings && majorDrawn<Maximum_Swing_Labels_Per_Timeframe)
+      {
+         double pivotATR=MAATR(r,copied,i,Average_Range_Period);
+         bool majorHigh=(MAIsPivotHigh(r,i,Major_Swing_Left_Bars,Major_Swing_Right_Bars) &&
+                         i-lastMajorHighBar>=Minimum_Bars_Between_Swings && pivotATR>0.0 &&
+                         MAPivotDeparture(r,copied,i,true)>=Minimum_Major_Swing_Size*pivotATR);
+         bool majorLow=(MAIsPivotLow(r,i,Major_Swing_Left_Bars,Major_Swing_Right_Bars) &&
+                        i-lastMajorLowBar>=Minimum_Bars_Between_Swings && pivotATR>0.0 &&
+                        MAPivotDeparture(r,copied,i,false)>=Minimum_Major_Swing_Size*pivotATR);
+         if(majorHigh)
+         {
+            string relation=(previousMajorHigh<=0.0 ? "SH" : MACompare(r[i].high,previousMajorHigh,tolerance,true));
+            PADrawText(PAObjectKey(PATFCode(tf),"MAJH",r[i].time),r[i].time,r[i].high,
+                       relation+" "+PATFCode(tf),InpBearColor,Chart_Label_Size);
+            previousMajorHigh=r[i].high; majorDrawn++; lastMajorHighBar=i;
+         }
+         if(majorLow)
+         {
+            string relation=(previousMajorLow<=0.0 ? "SL" : MACompare(r[i].low,previousMajorLow,tolerance,false));
+            PADrawText(PAObjectKey(PATFCode(tf),"MAJL",r[i].time),r[i].time,r[i].low,
+                       relation+" "+PATFCode(tf),InpBullColor,Chart_Label_Size);
+            previousMajorLow=r[i].low; majorDrawn++; lastMajorLowBar=i;
+         }
+      }
+      if(Show_Small_Swings && minorDrawn<Maximum_Swing_Labels_Per_Timeframe)
+      {
+         if(MAIsPivotHigh(r,i,Small_Swing_Left_Bars,Small_Swing_Right_Bars) && i-lastMinorHighBar>=Minimum_Bars_Between_Swings)
+         {
+            string relation=(previousMinorHigh<=0.0 ? "mH" : "m"+MACompare(r[i].high,previousMinorHigh,tolerance,true));
+            PADrawText(PAObjectKey(PATFCode(tf),"MINH",r[i].time),r[i].time,r[i].high,
+                       relation+" "+PATFCode(tf),Neutral_Analysis_Color,MathMax(6,Chart_Label_Size-1));
+            previousMinorHigh=r[i].high; minorDrawn++; lastMinorHighBar=i;
+         }
+         if(MAIsPivotLow(r,i,Small_Swing_Left_Bars,Small_Swing_Right_Bars) && i-lastMinorLowBar>=Minimum_Bars_Between_Swings)
+         {
+            string relation=(previousMinorLow<=0.0 ? "mL" : "m"+MACompare(r[i].low,previousMinorLow,tolerance,false));
+            PADrawText(PAObjectKey(PATFCode(tf),"MINL",r[i].time),r[i].time,r[i].low,
+                       relation+" "+PATFCode(tf),Neutral_Analysis_Color,MathMax(6,Chart_Label_Size-1));
+            previousMinorLow=r[i].low; minorDrawn++; lastMinorLowBar=i;
+         }
+      }
+   }
+}
+
+void PADrawFrameVisuals(const MAFrame &f)
+{
+   if(f.symbol!=Symbol() || f.lastClosedBar<=0) return;
+   string tf=PATFCode(f.tf);
+   int digits=(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS);
+   MqlRates r[];
+   ArraySetAsSeries(r,true);
+   int copied=CopyRates(f.symbol,f.tf,0,MathMax(80,History_Bars_To_Show),r);
+   if(copied<4) return;
+   datetime eventTime=r[1].time;
+   datetime oldestVisible=iTime(f.symbol,f.tf,MathMin(copied-1,MathMax(20,History_Bars_To_Show-1)));
+   string framePrefix=PA_PREFIX+tf+"_";
+   for(int obj=ObjectsTotal(0,0,-1)-1;obj>=0;obj--)
+   {
+      string objectName=ObjectName(0,obj,0,-1);
+      if(StringFind(objectName,framePrefix)!=0) continue;
+      if((ENUM_OBJECT)ObjectGetInteger(0,objectName,OBJPROP_TYPE)==OBJ_TEXT)
+      {
+         datetime objectTime=(datetime)ObjectGetInteger(0,objectName,OBJPROP_TIME);
+         if(oldestVisible>0 && objectTime>0 && objectTime<oldestVisible)
+            ObjectDelete(0,objectName);
+      }
+   }
+   datetime rightTime=TimeCurrent()+(datetime)(MathMax(1,PeriodSeconds(f.tf))*MathMax(5,InpFVGExtendBars));
+   double pad=MathMax(SymbolInfoDouble(f.symbol,SYMBOL_POINT)*8.0,
+                      MAATR(r,copied,1,Average_Range_Period)*0.12);
+
+   if(Show_BOS_And_Market_Shifts)
+   {
+      if(f.bullBOS) PADrawText(PAObjectKey(tf,"BOS_UP",eventTime),eventTime,r[1].low-pad,"BOS UP | "+tf,InpBullColor,Chart_Label_Size+1);
+      if(f.bearBOS) PADrawText(PAObjectKey(tf,"BOS_DN",eventTime),eventTime,r[1].high+pad,"BOS DOWN | "+tf,InpBearColor,Chart_Label_Size+1);
+      if(f.bullMSS) PADrawText(PAObjectKey(tf,"MSS_UP",eventTime),eventTime,r[1].low-pad*2.0,"MSS UP | "+tf,InpBullColor,Chart_Label_Size+1);
+      if(f.bearMSS) PADrawText(PAObjectKey(tf,"MSS_DN",eventTime),eventTime,r[1].high+pad*2.0,"MSS DOWN | "+tf,InpBearColor,Chart_Label_Size+1);
+      PADrawHLine(PA_PREFIX+tf+"_PROTECTED_HIGH",(f.protectedHighActive ? f.protectedHigh : 0.0),"Protected High | "+tf,InpBearColor,STYLE_DASH);
+      PADrawHLine(PA_PREFIX+tf+"_PROTECTED_LOW",(f.protectedLowActive ? f.protectedLow : 0.0),"Protected Low | "+tf,InpBullColor,STYLE_DASH);
+      if(f.protectedHighActive) PADrawText(PAObjectKey(tf,"PROTECTED_HIGH_LABEL",eventTime),eventTime,f.protectedHigh,"PROTECTED HIGH | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.protectedLowActive) PADrawText(PAObjectKey(tf,"PROTECTED_LOW_LABEL",eventTime),eventTime,f.protectedLow,"PROTECTED LOW | "+tf,InpBullColor,Chart_Label_Size);
+   }
+
+   if(Show_Liquidity_And_IDM)
+   {
+      if(f.bullSweep) PADrawText(PAObjectKey(tf,"SSL_SWEEP",eventTime),eventTime,r[1].low-pad,"SSL SWEEP / RECLAIM | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.bearSweep) PADrawText(PAObjectKey(tf,"BSL_SWEEP",eventTime),eventTime,r[1].high+pad,"BSL SWEEP / RECLAIM | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.bullInducement || f.bearInducement)
+      {
+         string side=(f.bullInducement ? "BULL IDM" : "BEAR IDM");
+         PADrawHLine(PA_PREFIX+tf+"_IDM",f.inducementPrice,side+" | "+tf,Neutral_Analysis_Color,STYLE_DOT);
+         PADrawText(PAObjectKey(tf,"IDM",eventTime),eventTime,f.inducementPrice,side+" | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+      }
+      if(f.dolPrice>0.0)
+      {
+         PADrawHLine(PA_PREFIX+tf+"_DOL",f.dolPrice,"DOL CANDIDATE: "+f.dolName+" | "+tf,Neutral_Analysis_Color,STYLE_DASHDOT);
+         PADrawText(PAObjectKey(tf,"DOL",eventTime),eventTime,f.dolPrice,"DOL | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+      }
+   }
+
+   if(Show_Trading_Range_Levels && f.rangeValid)
+   {
+      PADrawHLine(PA_PREFIX+tf+"_RANGE_HIGH",f.rangeHigh,"Range High | "+tf,Neutral_Analysis_Color,STYLE_DOT);
+      PADrawHLine(PA_PREFIX+tf+"_RANGE_EQ",f.eq,"EQ | "+tf,Neutral_Analysis_Color,STYLE_DASH);
+      PADrawHLine(PA_PREFIX+tf+"_RANGE_LOW",f.rangeLow,"Range Low | "+tf,Neutral_Analysis_Color,STYLE_DOT);
+      PADrawText(PAObjectKey(tf,"RANGE_HIGH_LABEL",eventTime),eventTime,f.rangeHigh,"RANGE HIGH | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+      PADrawText(PAObjectKey(tf,"RANGE_EQ_LABEL",eventTime),eventTime,f.eq,"EQUILIBRIUM | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+      PADrawText(PAObjectKey(tf,"RANGE_LOW_LABEL",eventTime),eventTime,f.rangeLow,"RANGE LOW | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+      PADrawText(PAObjectKey(tf,"RANGE_LOCATION",eventTime),eventTime,r[1].close,
+                 MARangeLocation(f.rangePos)+" | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+   }
+
+   if(Show_Price_Action_Patterns)
+   {
+      if(f.bullishEngulf) PADrawText(PAObjectKey(tf,"BULL_ENGULF",eventTime),eventTime,r[1].low-pad,"BULL ENGULF | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.bearishEngulf) PADrawText(PAObjectKey(tf,"BEAR_ENGULF",eventTime),eventTime,r[1].high+pad,"BEAR ENGULF | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.failedBreakUp) PADrawText(PAObjectKey(tf,"FAILED_HIGH",eventTime),eventTime,r[1].high+pad*2.0,"FAILED HIGH | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.failedBreakDown) PADrawText(PAObjectKey(tf,"FAILED_LOW",eventTime),eventTime,r[1].low-pad*2.0,"FAILED LOW | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.bullFVG || f.bearFVG)
+      {
+         string side=(f.bullFVG ? "BULL FVG TOUCH" : "BEAR FVG TOUCH");
+         color fvgColor=(f.bullFVG ? InpBullColor : InpBearColor);
+         PADrawText(PAObjectKey(tf,"FVG_TOUCH",eventTime),eventTime,r[1].close,side+" | "+tf,
+                    fvgColor,Chart_Label_Size);
+         bool zoneDrawn=false;
+         for(int z=2;z<MathMin(copied-2,Bars_To_Find_Recent_Patterns+2);z++)
+         {
+            if(f.bullFVG && r[z+2].high<r[z].low && r[1].low<=r[z].low && r[1].high>=r[z+2].high)
+            {
+               PADrawZone(PA_PREFIX+tf+"_FVG_TOUCH_ZONE",r[z+2].time,rightTime,r[z+2].high,r[z].low,"BULL FVG TOUCH | "+tf,InpBullColor);
+               PADrawText(PAObjectKey(tf,"FVG_ZONE_LABEL",eventTime),eventTime,(r[z+2].high+r[z].low)*0.5,"BULL FVG ZONE | "+tf,InpBullColor,Chart_Label_Size);
+               zoneDrawn=true; break;
+            }
+            if(f.bearFVG && r[z+2].low>r[z].high && r[1].high>=r[z].high && r[1].low<=r[z+2].low)
+            {
+               PADrawZone(PA_PREFIX+tf+"_FVG_TOUCH_ZONE",r[z+2].time,rightTime,r[z].high,r[z+2].low,"BEAR FVG TOUCH | "+tf,InpBearColor);
+               PADrawText(PAObjectKey(tf,"FVG_ZONE_LABEL",eventTime),eventTime,(r[z].high+r[z+2].low)*0.5,"BEAR FVG ZONE | "+tf,InpBearColor,Chart_Label_Size);
+               zoneDrawn=true; break;
+            }
+         }
+         if(!zoneDrawn) ObjectDelete(0,PA_PREFIX+tf+"_FVG_TOUCH_ZONE");
+      }
+      else ObjectDelete(0,PA_PREFIX+tf+"_FVG_TOUCH_ZONE");
+      if(f.bullVI || f.bearVI)
+      {
+         color c=(f.bullVI ? InpBullColor : InpBearColor);
+         PADrawZone(PA_PREFIX+tf+"_VI_ZONE",iTime(f.symbol,f.tf,2),rightTime,f.viLow,f.viHigh,
+                    (f.bullVI ? "BULL VI | "+tf : "BEAR VI | "+tf),c);
+         PADrawText(PAObjectKey(tf,"VI",eventTime),eventTime,(f.bullVI ? f.viLow : f.viHigh),
+                    (f.bullVI ? "BULL VI" : "BEAR VI")+" | "+tf,c,Chart_Label_Size);
+      }
+      else ObjectDelete(0,PA_PREFIX+tf+"_VI_ZONE");
+      if(f.bullIFVG) PADrawText(PAObjectKey(tf,"BULL_IFVG",eventTime),eventTime,r[1].low-pad,"BULL IFVG | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.bearIFVG) PADrawText(PAObjectKey(tf,"BEAR_IFVG",eventTime),eventTime,r[1].high+pad,"BEAR IFVG | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.bullRetest) PADrawText(PAObjectKey(tf,"BULL_RETEST",eventTime),eventTime,r[1].low-pad*2.0,"BULL RETEST | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.bearRetest) PADrawText(PAObjectKey(tf,"BEAR_RETEST",eventTime),eventTime,r[1].high+pad*2.0,"BEAR RETEST | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.bullEngulfFlip) PADrawText(PAObjectKey(tf,"BULL_ENGULF_FLIP",eventTime),eventTime,r[1].low-pad*3.0,"BULL ENGULF FLIP | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.bearEngulfFlip) PADrawText(PAObjectKey(tf,"BEAR_ENGULF_FLIP",eventTime),eventTime,r[1].high+pad*3.0,"BEAR ENGULF FLIP | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.rangeAcceptedUp) PADrawText(PAObjectKey(tf,"RANGE_ACCEPT_UP",eventTime),eventTime,r[1].low-pad*4.0,"RANGE ACCEPTED UP | "+tf,InpBullColor,Chart_Label_Size);
+      else if(f.expansionUp) PADrawText(PAObjectKey(tf,"RANGE_EXPAND_UP",eventTime),eventTime,r[1].low-pad*4.0,"RANGE BREAK CANDIDATE UP | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.rangeAcceptedDown) PADrawText(PAObjectKey(tf,"RANGE_ACCEPT_DN",eventTime),eventTime,r[1].high+pad*4.0,"RANGE ACCEPTED DOWN | "+tf,InpBearColor,Chart_Label_Size);
+      else if(f.expansionDown) PADrawText(PAObjectKey(tf,"RANGE_EXPAND_DN",eventTime),eventTime,r[1].high+pad*4.0,"RANGE BREAK CANDIDATE DOWN | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.kissingCandle) PADrawText(PAObjectKey(tf,"KISSING",eventTime),eventTime,f.kissingLevel,"KISSING / SNR CANDIDATE | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+      if(f.bullQML) PADrawText(PAObjectKey(tf,"BULL_QML",eventTime),eventTime,f.bullQMLLevel,"BULL QML | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.bearQML) PADrawText(PAObjectKey(tf,"BEAR_QML",eventTime),eventTime,f.bearQMLLevel,"BEAR QML | "+tf,InpBearColor,Chart_Label_Size);
+      if(f.liquiditySNR) PADrawText(PAObjectKey(tf,"LS_SNR",eventTime),eventTime,r[1].close,"LIQUIDITY SWEEP + SNR | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
+      if(f.pocFound) PADrawHLine(PA_PREFIX+tf+"_PCZ",f.pocLevel,"PCZ / REPEATED REJECTION | "+tf,Neutral_Analysis_Color,STYLE_DASHDOT);
+      else ObjectDelete(0,PA_PREFIX+tf+"_PCZ");
+      if(f.supportTrendlineValid) PADrawHLine(PA_PREFIX+tf+"_SUPPORT_TL",f.supportTrendlineNow,"SUPPORT TRENDLINE LEVEL | "+tf,InpBullColor,STYLE_DASHDOT);
+      else ObjectDelete(0,PA_PREFIX+tf+"_SUPPORT_TL");
+      if(f.resistanceTrendlineValid) PADrawHLine(PA_PREFIX+tf+"_RESIST_TL",f.resistanceTrendlineNow,"RESISTANCE TRENDLINE LEVEL | "+tf,InpBearColor,STYLE_DASHDOT);
+      else ObjectDelete(0,PA_PREFIX+tf+"_RESIST_TL");
+   }
+
+   if(Show_Supply_And_Demand_Zones)
+   {
+      if(f.demandActive)
+      {
+         datetime left=iTime(f.symbol,f.tf,MathMin(copied-1,Bars_To_Find_Recent_Patterns+2));
+         for(int j=2;j<MathMin(copied,Bars_To_Find_Recent_Patterns+4);j++)
+            if(MathAbs(r[j].low-f.demandLow)<=SymbolInfoDouble(f.symbol,SYMBOL_POINT)*2.0 &&
+               MathAbs(r[j].open-f.demandHigh)<=SymbolInfoDouble(f.symbol,SYMBOL_POINT)*2.0)
+            {left=r[j].time;break;}
+         PADrawZone(PA_PREFIX+tf+"_DEMAND",left,rightTime,f.demandLow,f.demandHigh,
+                    "DEMAND | "+tf+" | "+MAFreshnessText(f.demandFreshness),InpBullColor);
+         PADrawText(PAObjectKey(tf,"DEMAND_LABEL",eventTime),eventTime,(f.demandLow+f.demandHigh)*0.5,
+                    "DEMAND | "+tf+" | "+MAFreshnessText(f.demandFreshness),InpBullColor,Chart_Label_Size);
+         if(f.demandFreshness==3)
+            PADrawText(PAObjectKey(tf,"DEMAND_BROKEN",eventTime),eventTime,f.demandLow,"DEMAND BROKEN | "+tf,InpBearColor,Chart_Label_Size);
+         else if(f.mitigationDemand)
+            PADrawText(PAObjectKey(tf,"DEMAND_MITIGATION",eventTime),eventTime,f.demandLow,"DEMAND MITIGATION | "+tf,InpBullColor,Chart_Label_Size);
+      }
+      else ObjectDelete(0,PA_PREFIX+tf+"_DEMAND");
+      if(f.supplyActive)
+      {
+         datetime left=iTime(f.symbol,f.tf,MathMin(copied-1,Bars_To_Find_Recent_Patterns+2));
+         for(int j=2;j<MathMin(copied,Bars_To_Find_Recent_Patterns+4);j++)
+            if(MathAbs(r[j].open-f.supplyLow)<=SymbolInfoDouble(f.symbol,SYMBOL_POINT)*2.0 &&
+               MathAbs(r[j].high-f.supplyHigh)<=SymbolInfoDouble(f.symbol,SYMBOL_POINT)*2.0)
+            {left=r[j].time;break;}
+         PADrawZone(PA_PREFIX+tf+"_SUPPLY",left,rightTime,f.supplyLow,f.supplyHigh,
+                    "SUPPLY | "+tf+" | "+MAFreshnessText(f.supplyFreshness),InpBearColor);
+         PADrawText(PAObjectKey(tf,"SUPPLY_LABEL",eventTime),eventTime,(f.supplyLow+f.supplyHigh)*0.5,
+                    "SUPPLY | "+tf+" | "+MAFreshnessText(f.supplyFreshness),InpBearColor,Chart_Label_Size);
+         if(f.supplyFreshness==3)
+            PADrawText(PAObjectKey(tf,"SUPPLY_BROKEN",eventTime),eventTime,f.supplyHigh,"SUPPLY BROKEN | "+tf,InpBullColor,Chart_Label_Size);
+         else if(f.mitigationSupply)
+            PADrawText(PAObjectKey(tf,"SUPPLY_MITIGATION",eventTime),eventTime,f.supplyHigh,"SUPPLY MITIGATION | "+tf,InpBearColor,Chart_Label_Size);
+      }
+      else ObjectDelete(0,PA_PREFIX+tf+"_SUPPLY");
+      if(f.demandFlip) PADrawText(PAObjectKey(tf,"DEMAND_FLIP",eventTime),eventTime,r[1].close,"DEMAND FLIP | "+tf,InpBullColor,Chart_Label_Size);
+      if(f.supplyFlip) PADrawText(PAObjectKey(tf,"SUPPLY_FLIP",eventTime),eventTime,r[1].close,"SUPPLY FLIP | "+tf,InpBearColor,Chart_Label_Size);
+   }
+}
+
+void PADrawStatusPanel()
+{
+   string name=PA_PREFIX+"STATUS_PANEL";
+   if(!Show_Price_Action_On_Chart || !Show_Detection_Status_Panel || !Show_Market_Analysis)
+   {ObjectsDeleteAll(0,name);return;}
+   int index=MAFindFrame(Symbol(),(ENUM_TIMEFRAMES)Period());
+   if(index<0)
+   {
+      DrawTextBlock(name,"GLORYALGO PRICE ACTION\nCurrent chart timeframe: NOT CHECKED",
+                    12,18,13,Chart_Label_Size,Neutral_Analysis_Color,"Consolas",
+                    CORNER_RIGHT_UPPER,ANCHOR_RIGHT_UPPER,false);
+      return;
+   }
+   MAFrame f=g_maFrames[index];
+   bool checked=(f.state!=MA_STATE_INSUFFICIENT && f.lastClosedBar>0);
+   string text="GLORYALGO | PRICE ACTION CHECK\n";
+   text+="TIMEFRAME: "+PATFCode(f.tf)+"\n";
+   text+="STRUCTURE: "+(checked ? MAStateText(f.state) : "NOT CHECKED")+"\n";
+   text+="BOS: "+PAStatus(checked,(f.bullBOS || f.bearBOS))+" | MSS: "+PAStatus(checked,(f.bullMSS || f.bearMSS))+"\n";
+   text+="PROTECTED HIGH: "+PAStatus(checked,f.protectedHighActive)+" | LOW: "+PAStatus(checked,f.protectedLowActive)+"\n";
+   text+="RANGE: "+PAStatus(checked,f.rangeValid)+" | LOCATION: "+(checked && f.rangeValid ? MARangeLocation(f.rangePos) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
+   text+="LIQUIDITY SWEEP: "+PAStatus(checked,(f.bullSweep || f.bearSweep))+"\n";
+   text+="IDM: "+PAStatus(checked,(f.bullInducement || f.bearInducement))+" | DOL: "+(checked && f.dolPrice>0.0 ? "CANDIDATE" : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
+   text+="FVG TOUCH: "+PAStatus(checked,(f.bullFVG || f.bearFVG))+" | IFVG: "+PAStatus(checked,(f.bullIFVG || f.bearIFVG))+"\n";
+   text+="VI: "+PAStatus(checked,(f.bullVI || f.bearVI))+" | KISSING: "+PAStatus(checked,f.kissingCandle)+"\n";
+   text+="ENGULFING: "+PAStatus(checked,(f.bullishEngulf || f.bearishEngulf))+" | FAILED BREAK: "+PAStatus(checked,(f.failedBreakUp || f.failedBreakDown))+"\n";
+   text+="QML: "+PAStatus(checked,(f.bullQML || f.bearQML))+" | ENGULF FLIP: "+PAStatus(checked,(f.bullEngulfFlip || f.bearEngulfFlip))+"\n";
+   text+="SUPPLY: "+PAStatus(checked,f.supplyActive)+" | DEMAND: "+PAStatus(checked,f.demandActive)+"\n";
+   text+="TRENDLINE: "+PAStatus(checked,(f.supportTrendlineValid || f.resistanceTrendlineValid))+" | PCZ: "+PAStatus(checked,f.pocFound)+"\n";
+   text+="LS + SNR: "+PAStatus(checked,f.liquiditySNR)+" | RETEST: "+PAStatus(checked,(f.bullRetest || f.bearRetest))+"\n";
+   text+="EXPANSION: "+(checked && (f.rangeAcceptedUp || f.rangeAcceptedDown) ? "DETECTED / ACCEPTED" : (checked && (f.expansionUp || f.expansionDown) ? "CANDIDATE" : (checked ? "NOT FOUND" : "NOT CHECKED")))+"\n";
+   text+="Zone status: "+(f.demandFreshness==3 ? "DEMAND INVALID" : MAFreshnessText(f.demandFreshness))+" / "+(f.supplyFreshness==3 ? "SUPPLY INVALID" : MAFreshnessText(f.supplyFreshness));
+   DrawTextBlock(name,text,12,18,13,Chart_Label_Size,InpInkColor,"Consolas",
+                 CORNER_RIGHT_UPPER,ANCHOR_RIGHT_UPPER,false);
+}
+
+void MADrawPriceAction()
+{
+   if(!Show_Price_Action_On_Chart || !Show_Market_Analysis)
+   {
+      ObjectsDeleteAll(0,PA_PREFIX);
+      g_paVisualSignature="";
+      return;
+   }
+   string signature=Symbol()+"|"+IntegerToString(Period());
+   for(int i=0;i<g_maFrameCount;i++)
+   {
+      if(g_maFrames[i].symbol!=Symbol()) continue;
+      if(!Show_All_Timeframes && g_maFrames[i].tf!=(ENUM_TIMEFRAMES)Period()) continue;
+      signature+="|"+PATFCode(g_maFrames[i].tf)+":"+IntegerToString((long)g_maFrames[i].lastClosedBar);
+   }
+   if(signature==g_paVisualSignature) {PADrawStatusPanel();return;}
+   g_paVisualSignature=signature;
+   for(int i=0;i<g_maFrameCount;i++)
+   {
+      if(g_maFrames[i].symbol!=Symbol()) continue;
+      if(!Show_All_Timeframes && g_maFrames[i].tf!=(ENUM_TIMEFRAMES)Period()) continue;
+      if(Show_Major_Swings || Show_Small_Swings)
+         PADrawHistoricalSwings(g_maFrames[i].tf);
+      PADrawFrameVisuals(g_maFrames[i]);
+   }
+   PADrawStatusPanel();
+   ChartRedraw(0);
+}
+
+void MAWriteLog(const MAFrame &f)
+{
+   if(!Save_Analysis_Log) return;
+   int h=FileOpen("GloryAlgo_Market_Analysis_v2.csv",FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ,',');
+   if(h==INVALID_HANDLE) h=FileOpen("GloryAlgo_Market_Analysis_v2.csv",FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ,',');
+   if(h==INVALID_HANDLE) return;
+   if(FileSize(h)==0) FileWrite(h,"bar_time","symbol","timeframe","state","score","major_high","major_low","protected_high","protected_low","range_high","range_low","eq","range_location","bull_sweep","bear_sweep","bull_fvg","bear_fvg","bull_engulf","bear_engulf","failed_up","failed_down","poc_level","poc_tests","range_accepted_up","range_accepted_down","bull_retest","bear_retest","bull_vi","bear_vi","kissing_level","support_trendline","resistance_trendline","bull_qml","bear_qml","dol_name","dol_price","idm_price","demand_flip","supply_flip","mitigation_demand","mitigation_supply","liquidity_snr","bull_ifvg","bear_ifvg","bull_engulf_flip","bear_engulf_flip");
+   FileSeek(h,0,SEEK_END);
+   FileWrite(h,TimeToString(f.lastClosedBar,TIME_DATE|TIME_MINUTES),f.symbol,TimeframeName(f.tf),MAStateText(f.state),f.score,
+      DoubleToString(f.lastMajorHigh,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),DoubleToString(f.lastMajorLow,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),
+      DoubleToString(f.protectedHigh,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),DoubleToString(f.protectedLow,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),
+      DoubleToString(f.rangeHigh,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),DoubleToString(f.rangeLow,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),DoubleToString(f.eq,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),
+      MARangeLocation(f.rangePos),(int)f.bullSweep,(int)f.bearSweep,(int)f.bullFVG,(int)f.bearFVG,(int)f.bullishEngulf,(int)f.bearishEngulf,(int)f.failedBreakUp,(int)f.failedBreakDown,DoubleToString(f.pocLevel,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),f.pocTests,
+      (int)f.rangeAcceptedUp,(int)f.rangeAcceptedDown,(int)f.bullRetest,(int)f.bearRetest,(int)f.bullVI,(int)f.bearVI,
+      DoubleToString(f.kissingLevel,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.supportTrendlineValid,(int)f.resistanceTrendlineValid,
+      (int)f.bullQML,(int)f.bearQML,f.dolName,DoubleToString(f.dolPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),
+      DoubleToString(f.inducementPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.demandFlip,(int)f.supplyFlip,
+      (int)f.mitigationDemand,(int)f.mitigationSupply,(int)f.liquiditySNR,
+      (int)f.bullIFVG,(int)f.bearIFVG,(int)f.bullEngulfFlip,(int)f.bearEngulfFlip);
+   FileClose(h);
+}
+
+void MAAnalyzeAll()
+{
+   if(!Show_Market_Analysis) return;
+   // Analyse every configured timeframe independently, plus the mandatory W1/D1/H4 context frames.
+   for(int s=0;s<g_symbolCount;s++)
+   {
+      bool hasW=false,hasD=false,hasH4=false;
+      for(int t=0;t<g_timeframeCount;t++)
+      {
+         ENUM_TIMEFRAMES tf=g_timeframes[t];
+         if(tf==PERIOD_W1) hasW=true; if(tf==PERIOD_D1) hasD=true; if(tf==PERIOD_H4) hasH4=true;
+         MAFrame f; if(MAAnalyzeFrame(g_symbols[s],tf,f)) MAStoreFrame(f);
+      }
+      MAFrame f;
+      if(!hasW && MAAnalyzeFrame(g_symbols[s],PERIOD_W1,f)) MAStoreFrame(f);
+      if(!hasD && MAAnalyzeFrame(g_symbols[s],PERIOD_D1,f)) MAStoreFrame(f);
+      if(!hasH4 && MAAnalyzeFrame(g_symbols[s],PERIOD_H4,f)) MAStoreFrame(f);
+   }
+   int chartH4=MAFindFrame(Symbol(),PERIOD_H4);
+   if(chartH4>=0) MADrawPanel();
+   MADrawPriceAction();
+   datetime now=TimeCurrent();
+   int interval=MathMax(1,Save_Analysis_Every_Minutes)*60;
+   if(g_lastAnalysisLog==0 || now-g_lastAnalysisLog>=interval)
+   {
+      for(int i=0;i<g_maFrameCount;i++) MAWriteLog(g_maFrames[i]);
+      g_lastAnalysisLog=now;
+   }
+}
+
+//------------------------- TIMEFRAME PARSER -----------------------//
+ENUM_TIMEFRAMES ParseTimeframe(string value)
+{
+   StringToUpper(value);
+
+   if(value=="M1")  return PERIOD_M1;
+   if(value=="M2")  return PERIOD_M2;
+   if(value=="M3")  return PERIOD_M3;
+   if(value=="M4")  return PERIOD_M4;
+   if(value=="M5")  return PERIOD_M5;
+   if(value=="M6")  return PERIOD_M6;
+   if(value=="M10") return PERIOD_M10;
+   if(value=="M12") return PERIOD_M12;
+   if(value=="M15") return PERIOD_M15;
+   if(value=="M20") return PERIOD_M20;
+   if(value=="M30") return PERIOD_M30;
+   if(value=="M45") return PERIOD_M45;
+
+   if(value=="H1")  return PERIOD_H1;
+   if(value=="H2")  return PERIOD_H2;
+   if(value=="H3")  return PERIOD_H3;
+   if(value=="H4")  return PERIOD_H4;
+   if(value=="H6")  return PERIOD_H6;
+   if(value=="H8")  return PERIOD_H8;
+   if(value=="H12") return PERIOD_H12;
+
+   if(value=="D1")  return PERIOD_D1;
+   if(value=="W1")  return PERIOD_W1;
+   if(value=="MN1") return PERIOD_MN1;
+
+   return PERIOD_CURRENT;
+}
+
+//------------------------- TIMEFRAME NAME -------------------------//
+string TimeframeName(ENUM_TIMEFRAMES tf)
+{
+   string name=EnumToString(tf);
+   StringReplace(name,"PERIOD_","");
+   return name;
+}
+
+//------------------------- SIGNAL NAME ----------------------------//
+string SignalName(ENUM_CRT_SIGNAL signal)
+{
+   if(signal==CRT_BULL)   return "BULL";
+   if(signal==CRT_BEAR)   return "BEAR";
+   if(signal==CRT_DOUBLE) return "DOUBLE";
+   return "-";
+}
+
+//------------------------- CISD TIMEFRAME MAPPING -----------------//
+ENUM_TIMEFRAMES GetCISDTimeframe(ENUM_TIMEFRAMES crtTF)
+{
+   switch(crtTF)
+   {
+      case PERIOD_M15: return PERIOD_M1;
+      case PERIOD_M30: return PERIOD_M3;
+      case PERIOD_H1:  return PERIOD_M5;
+      case PERIOD_H2:  return PERIOD_M5;
+      case PERIOD_H4:  return PERIOD_M15;
+      case PERIOD_D1:  return PERIOD_M30;
+      case PERIOD_W1:  return PERIOD_H4;
+      case PERIOD_MN1: return PERIOD_D1;
+   }
+
+   return PERIOD_CURRENT;
+}
+
+//------------------------- SYMBOL LOADING -------------------------//
+void AddSymbol(string symbol)
+{
+   StringTrimLeft(symbol);
+   StringTrimRight(symbol);
+
+   if(symbol=="")
+      return;
+
+   for(int i=0;i<g_symbolCount;i++)
+      if(g_symbols[i]==symbol)
+         return;
+
+   if(g_symbolCount>=InpMaxSymbols)
+      return;
+
+   if(!SymbolSelect(symbol,true))
+   {
+      Print("GloryAlgo: Could not select symbol: ",symbol);
+      return;
+   }
+
+   ArrayResize(g_symbols,g_symbolCount+1);
+   g_symbols[g_symbolCount]=symbol;
+   g_symbolCount++;
+}
+
+void LoadSymbols()
+{
+   ArrayResize(g_symbols,0);
+   g_symbolCount=0;
+
+   if(InpSymbolSource==SYMBOLS_MANUAL ||
+      InpSymbolSource==SYMBOLS_BOTH)
+   {
+      string manual[];
+      int count=StringSplit(InpManualSymbols,',',manual);
+
+      for(int i=0;i<count;i++)
+         AddSymbol(manual[i]);
+   }
+
+   if(InpSymbolSource==SYMBOLS_MARKET_WATCH ||
+      InpSymbolSource==SYMBOLS_BOTH)
+   {
+      int total=SymbolsTotal(true);
+
+      for(int i=0;i<total && g_symbolCount<InpMaxSymbols;i++)
+         AddSymbol(SymbolName(i,true));
+   }
+}
+
+//------------------------- TIMEFRAME LOADING -----------------------//
+void LoadTimeframes()
+{
+   ArrayResize(g_timeframes,0);
+   g_timeframeCount=0;
+
+   string parts[];
+   int count=StringSplit(InpTimeframes,',',parts);
+
+   for(int i=0;i<count;i++)
+   {
+      StringTrimLeft(parts[i]);
+      StringTrimRight(parts[i]);
+
+      ENUM_TIMEFRAMES tf=ParseTimeframe(parts[i]);
+
+      if(tf==PERIOD_CURRENT)
+      {
+         Print("GloryAlgo: Unsupported timeframe: ",parts[i]);
+         continue;
+      }
+
+      bool duplicate=false;
+
+      for(int j=0;j<g_timeframeCount;j++)
+         if(g_timeframes[j]==tf)
+            duplicate=true;
+
+      if(duplicate)
+         continue;
+
+      ArrayResize(g_timeframes,g_timeframeCount+1);
+      g_timeframes[g_timeframeCount]=tf;
+      g_timeframeCount++;
+   }
+
+   for(int a=0;a<g_timeframeCount-1;a++)
+   {
+      for(int b=a+1;b<g_timeframeCount;b++)
+      {
+         if(PeriodSeconds(g_timeframes[a])>
+            PeriodSeconds(g_timeframes[b]))
+         {
+            ENUM_TIMEFRAMES temp=g_timeframes[a];
+            g_timeframes[a]=g_timeframes[b];
+            g_timeframes[b]=temp;
+         }
+      }
+   }
+}
+
+//------------------------- INITIALIZE STATES -----------------------//
+void InitializeStates()
+{
+   g_stateCount=0;
+   ArrayResize(g_states,0);
+
+   for(int s=0;s<g_symbolCount;s++)
+   {
+      for(int t=0;t<g_timeframeCount;t++)
+      {
+         ArrayResize(g_states,g_stateCount+1);
+
+         g_states[g_stateCount].symbol=g_symbols[s];
+         g_states[g_stateCount].timeframe=g_timeframes[t];
+
+         g_states[g_stateCount].currentBarTime=0;
+         g_states[g_stateCount].confirmedC3Time=0;
+
+         g_states[g_stateCount].confirmedSignal=CRT_NONE;
+         g_states[g_stateCount].advancedSignal=CRT_NONE;
+
+         g_states[g_stateCount].confirmedFVGQualified=false;
+         g_states[g_stateCount].advancedFVGQualified=false;
+         g_states[g_stateCount].confirmedFVGPresent=false;
+
+         g_states[g_stateCount].confirmedC1Time=0;
+         g_states[g_stateCount].confirmedC2Time=0;
+         g_states[g_stateCount].confirmedC3EndTime=0;
+         g_states[g_stateCount].confirmedC1High=0.0;
+         g_states[g_stateCount].confirmedC1Low=0.0;
+
+         g_states[g_stateCount].cisdReferenceFound=false;
+         g_states[g_stateCount].cisdConfirmed=false;
+         g_states[g_stateCount].cisdReferenceTime=0;
+         g_states[g_stateCount].cisdConfirmationTime=0;
+         g_states[g_stateCount].cisdReferencePrice=0.0;
+
+         g_states[g_stateCount].confirmedC2High=0.0;
+         g_states[g_stateCount].confirmedC2Low=0.0;
+
+         g_states[g_stateCount].setupActive=false;
+         g_states[g_stateCount].setupScore=0;
+         g_states[g_stateCount].cfHTF=false;
+         g_states[g_stateCount].cfLiquidity=false;
+         g_states[g_stateCount].cfLiqPool=false;
+         g_states[g_stateCount].cfLiqSession=false;
+         g_states[g_stateCount].cfLiqRejection=false;
+         g_states[g_stateCount].kzId=0;
+         g_states[g_stateCount].setupSL=0.0;
+         g_states[g_stateCount].setupTP=0.0;
+         g_states[g_stateCount].setupRR=-1.0;
+         g_states[g_stateCount].setupAlertC2=0;
+
+         g_states[g_stateCount].setupDir=CRT_NONE;
+         g_states[g_stateCount].setupEarly=false;
+         g_states[g_stateCount].setupC2Time=0;
+         g_states[g_stateCount].setupExtTime=0;
+         g_states[g_stateCount].setupAlertExt=0;
+         g_states[g_stateCount].setupCisdTime=0;
+         g_states[g_stateCount].setupCisdPrice=0.0;
+
+         g_states[g_stateCount].advC1Time=0;
+         g_states[g_stateCount].advC1High=0.0;
+         g_states[g_stateCount].advC1Low=0.0;
+         g_states[g_stateCount].advC2Open=0.0;
+         g_states[g_stateCount].advC2High=0.0;
+         g_states[g_stateCount].advC2Low=0.0;
+
+         g_states[g_stateCount].fvgCacheC2=0;
+         g_states[g_stateCount].fvgCacheVal=false;
+
+         g_states[g_stateCount].advC1Open=0.0;
+         g_states[g_stateCount].advC1Close=0.0;
+         g_states[g_stateCount].advC2Close=0.0;
+
+         g_states[g_stateCount].cfTrend=false;
+         g_states[g_stateCount].cfSMT=false;
+         g_states[g_stateCount].setupEntry=0.0;
+         g_states[g_stateCount].setupFormTime=0;
+
+         g_stateCount++;
+      }
+   }
+}
+
+//------------------------- CRT CLASSIFICATION ----------------------//
+ENUM_CRT_SIGNAL ClassifyCRT(const MqlRates &c1,
+                            const MqlRates &c2)
+{
+   bool sweptHigh=(c2.high>c1.high);
+   bool sweptLow=(c2.low<c1.low);
+
+   if(sweptHigh && sweptLow)
+   {
+      // Strict CRT: a candle that sweeps BOTH sides has no clear
+      // false side, so it is never a directional CRT.
+      if(InpStrictCRT)
+         return CRT_DOUBLE;
+
+      if(c2.close>c1.high)
+         return CRT_BULL;
+
+      if(c2.close<c1.low)
+         return CRT_BEAR;
+
+      if(c2.close>=c1.low && c2.close<=c1.high)
+         return CRT_DOUBLE;
+
+      return CRT_NONE;
+   }
+
+   if(sweptHigh && c2.close<c1.high)
+      return CRT_BEAR;
+
+   if(sweptLow && c2.close>c1.low)
+      return CRT_BULL;
+
+   return CRT_NONE;
+}
+
+//------------------------- FIND NEAREST HTF STATE ------------------//
+int FindNearestHigherState(int stateIndex)
+{
+   ENUM_TIMEFRAMES currentTF=g_states[stateIndex].timeframe;
+   int currentSeconds=PeriodSeconds(currentTF);
+
+   if(currentSeconds<=0)
+      return -1;
+
+   int bestIndex=-1;
+   int bestSeconds=0;
+
+   string symbol=g_states[stateIndex].symbol;
+
+   for(int t=0;t<g_timeframeCount;t++)
+   {
+      int candidateSeconds=PeriodSeconds(g_timeframes[t]);
+
+      if(candidateSeconds<=currentSeconds)
+         continue;
+
+      if(bestSeconds==0 || candidateSeconds<bestSeconds)
+      {
+         bestSeconds=candidateSeconds;
+         bestIndex=-1;
+
+         for(int i=0;i<g_stateCount;i++)
+         {
+            if(g_states[i].symbol==symbol &&
+               g_states[i].timeframe==g_timeframes[t])
+            {
+               bestIndex=i;
+               break;
+            }
+         }
+      }
+   }
+
+   return bestIndex;
+}
+
+//------------------------- FIND NEAREST HIGHER TF ------------------//
+ENUM_TIMEFRAMES FindNearestHigherTF(ENUM_TIMEFRAMES currentTF)
+{
+   int currentSeconds=PeriodSeconds(currentTF);
+   int bestSeconds=0;
+   ENUM_TIMEFRAMES bestTF=PERIOD_CURRENT;
+
+   for(int i=0;i<g_timeframeCount;i++)
+   {
+      int seconds=PeriodSeconds(g_timeframes[i]);
+
+      if(seconds<=currentSeconds)
+         continue;
+
+      if(bestSeconds==0 || seconds<bestSeconds)
+      {
+         bestSeconds=seconds;
+         bestTF=g_timeframes[i];
+      }
+   }
+
+   return bestTF;
+}
+
+//------------------------- FVG PERMISSION --------------------------//
+bool IsFVGDirectionPermitted(ENUM_FVG_PERMISSION permission,
+                             bool bullishFVG)
+{
+   if(permission==FVG_PERMISSION_BOTH)
+      return true;
+
+   if(bullishFVG && permission==FVG_PERMISSION_BULLISH)
+      return true;
+
+   if(!bullishFVG && permission==FVG_PERMISSION_BEARISH)
+      return true;
+
+   return false;
+}
+
+//------------------------- FVG ZONE VALIDITY -----------------------//
+bool IsFVGStillValid(const MqlRates &rates[],
+                     int fvgIndex,
+                     bool bullish,
+                     double zoneLow,
+                     double zoneHigh,
+                     datetime evaluationTime,
+                     ENUM_TIMEFRAMES tf)
+{
+   int seconds=PeriodSeconds(tf);
+
+   if(seconds<=0)
+      return false;
+
+   // Series array: index 0 is newest.
+   // Only candles fully closed by evaluationTime can invalidate.
+   for(int j=fvgIndex-1;j>=0;j--)
+   {
+      datetime candleClose=rates[j].time+seconds;
+
+      if(candleClose>evaluationTime)
+         continue;
+
+      if(bullish && rates[j].low<=zoneLow)
+         return false;
+
+      if(!bullish && rates[j].high>=zoneHigh)
+         return false;
+   }
+
+   return true;
+}
+
+//------------------------- CHECK HTF FVG TOUCH ---------------------//
+bool FindHTFFVGTouch(string symbol,
+                     ENUM_TIMEFRAMES htf,
+                     const MqlRates &c2,
+                     ENUM_FVG_PERMISSION permission)
+{
+   if(permission==FVG_PERMISSION_NONE)
+      return false;
+
+   int lookback=InpFVGLookback;
+
+   if(lookback<5)
+      lookback=5;
+
+   MqlRates htfRates[];
+   ArraySetAsSeries(htfRates,true);
+
+   int copied=CopyRates(symbol,htf,0,lookback+5,htfRates);
+
+   if(copied<5)
+      return false;
+
+   int htfSeconds=PeriodSeconds(htf);
+
+   if(htfSeconds<=0)
+      return false;
+
+   int maxIndex=(int)MathMin(lookback,copied-3);
+
+   for(int i=1;i<=maxIndex;i++)
+   {
+      int older=i+2;
+
+      // The third candle must have closed before C2 began.
+      datetime formedTime=htfRates[i].time+htfSeconds;
+
+      if(formedTime>c2.time)
+         continue;
+
+      bool bullishFVG=
+         (htfRates[older].high < htfRates[i].low);
+
+      bool bearishFVG=
+         (htfRates[older].low > htfRates[i].high);
+
+      if(!bullishFVG && !bearishFVG)
+         continue;
+
+      if(bullishFVG &&
+         !IsFVGDirectionPermitted(permission,true))
+         continue;
+
+      if(bearishFVG &&
+         !IsFVGDirectionPermitted(permission,false))
+         continue;
+
+      double zoneLow=0.0;
+      double zoneHigh=0.0;
+
+      if(bullishFVG)
+      {
+         zoneLow=htfRates[older].high;
+         zoneHigh=htfRates[i].low;
+      }
+      else
+      {
+         zoneLow=htfRates[i].high;
+         zoneHigh=htfRates[older].low;
+      }
+
+      if(!IsFVGStillValid(
+            htfRates,
+            i,
+            bullishFVG,
+            zoneLow,
+            zoneHigh,
+            c2.time,
+            htf))
+         continue;
+
+      bool touches=
+         (c2.high>=zoneLow && c2.low<=zoneHigh);
+
+      if(touches)
+         return true;
+   }
+
+   return false;
+}
+
+//------------------------- CHECK CRT FVG QUALIFICATION -------------//
+bool CheckCRTFVG(int stateIndex,
+                 ENUM_CRT_SIGNAL signal,
+                 const MqlRates &c2)
+{
+   if(signal==CRT_NONE)
+      return false;
+
+   int htfIndex=FindNearestHigherState(stateIndex);
+
+   if(htfIndex<0)
+      return false;
+
+   ENUM_TIMEFRAMES htf=g_states[htfIndex].timeframe;
+   string symbol=g_states[stateIndex].symbol;
+
+   if(signal==CRT_BULL)
+      return FindHTFFVGTouch(symbol,htf,c2,
+                             InpBullCRT_FVGPermission);
+
+   if(signal==CRT_BEAR)
+      return FindHTFFVGTouch(symbol,htf,c2,
+                             InpBearCRT_FVGPermission);
+
+   if(signal==CRT_DOUBLE)
+   {
+      bool bullTouch=FindHTFFVGTouch(
+         symbol,htf,c2,InpBullCRT_FVGPermission
+      );
+
+      bool bearTouch=FindHTFFVGTouch(
+         symbol,htf,c2,InpBearCRT_FVGPermission
+      );
+
+      return (bullTouch || bearTouch);
+   }
+
+   return false;
+}
+
+//------------------------- FVG FILTER WRAPPER ----------------------//
+bool IsCRTQualifiedByFVG(int stateIndex,
+                         ENUM_CRT_SIGNAL signal,
+                         const MqlRates &c2)
+{
+   if(!InpEnableFVGFilter)
+      return true;
+
+   return CheckCRTFVG(stateIndex,signal,c2);
+}
+
+//------------------------- CISD DETECTION --------------------------//
+void ResetCISDState(int stateIndex)
+{
+   g_states[stateIndex].cisdReferenceFound=false;
+   g_states[stateIndex].cisdConfirmed=false;
+
+   g_states[stateIndex].cisdReferenceTime=0;
+   g_states[stateIndex].cisdConfirmationTime=0;
+   g_states[stateIndex].cisdReferencePrice=0.0;
+}
+
+struct CISDResult
+{
+   bool     extremeFound;
+   datetime extremeTime;
+   double   extremePrice;
+
+   bool     refFound;
+   datetime refTime;
+   double   refPrice;
+
+   bool     confirmed;
+   datetime confTime;
+
+   bool     slBreached;   // price traded beyond the C2 extreme afterwards
+   bool     tpHit;        // price reached the opposite C1 extreme afterwards
+
+   double   confClose;    // close of the CISD confirmation candle (planned entry)
+};
+
+void ResetCISDResult(CISDResult &r)
+{
+   r.extremeFound=false;
+   r.extremeTime=0;
+   r.extremePrice=0.0;
+
+   r.refFound=false;
+   r.refTime=0;
+   r.refPrice=0.0;
+
+   r.confirmed=false;
+   r.confTime=0;
+
+   r.slBreached=false;
+   r.tpHit=false;
+
+   r.confClose=0.0;
+}
+
+// Generic CISD calculation for ANY C2 (completed or still forming).
+//
+// Bullish CRT (C2 swept the low):
+//  - Find the LTF candle with the lowest low inside C2.
+//  - Look LEFT of it for the first candle that closed UP.
+//  - That candle's CLOSE is the CISD level.
+//  - CISD is confirmed when a later, fully closed LTF candle closes
+//    ABOVE that level.
+// Bearish CRT: mirrored (highest high, first candle that closed DOWN,
+// confirmation = close BELOW the level).
+//
+// It also reports whether price has traded beyond the C2 extreme
+// (stop loss) or reached tpPrice since that extreme was made.
+bool ComputeCISD(string symbol,
+                 ENUM_TIMEFRAMES crtTF,
+                 ENUM_CRT_SIGNAL signal,
+                 datetime c2Time,
+                 double tpPrice,
+                 CISDResult &res)
+{
+   ResetCISDResult(res);
+
+   if(signal!=CRT_BULL && signal!=CRT_BEAR)
+      return false;
+
+   if(c2Time<=0)
+      return false;
+
+   ENUM_TIMEFRAMES ltf=GetCISDTimeframe(crtTF);
+
+   if(ltf==PERIOD_CURRENT)
+      return false;
+
+   int ltfSeconds=PeriodSeconds(ltf);
+   int crtSeconds=PeriodSeconds(crtTF);
+
+   if(ltfSeconds<=0 || crtSeconds<=0 ||
+      ltfSeconds>=crtSeconds)
+      return false;
+
+   datetime c2End=c2Time+crtSeconds;
+   datetime now=TimeCurrent();
+
+   int lookbackCRTs=InpCISDLookbackCRTCandles;
+
+   if(lookbackCRTs<1)
+      lookbackCRTs=1;
+
+   // Start earlier than C2 so the reference candle can sit
+   // to the left of C2 (inside C1 or before it).
+   datetime scanStart=
+      c2Time-(datetime)(crtSeconds*lookbackCRTs);
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates,false);   // index 0 = oldest
+
+   int copied=CopyRates(symbol,ltf,scanStart,now,rates);
+
+   if(copied<3)
+      return false;
+
+   // 1) LTF candle that made the C2 extreme (only candles inside C2).
+   int extremeIndex=-1;
+   double extremePrice=
+      (signal==CRT_BEAR ? -DBL_MAX : DBL_MAX);
+
+   for(int i=0;i<copied;i++)
+   {
+      if(rates[i].time<c2Time)
+         continue;
+
+      if(rates[i].time>=c2End)
+         break;
+
+      if(signal==CRT_BEAR)
+      {
+         if(rates[i].high>extremePrice)
+         {
+            extremePrice=rates[i].high;
+            extremeIndex=i;
+         }
+      }
+      else
+      {
+         if(rates[i].low<extremePrice)
+         {
+            extremePrice=rates[i].low;
+            extremeIndex=i;
+         }
+      }
+   }
+
+   if(extremeIndex<0)
+      return false;
+
+   res.extremeFound=true;
+   res.extremeTime=rates[extremeIndex].time;
+   res.extremePrice=extremePrice;
+
+   // 2) Stop loss / take profit touched after the extreme.
+   for(int i=extremeIndex+1;i<copied;i++)
+   {
+      if(signal==CRT_BULL)
+      {
+         if(rates[i].low<extremePrice)
+            res.slBreached=true;
+
+         if(tpPrice>0.0 && rates[i].high>=tpPrice)
+            res.tpHit=true;
+      }
+      else
+      {
+         if(rates[i].high>extremePrice)
+            res.slBreached=true;
+
+         if(tpPrice>0.0 && rates[i].low<=tpPrice)
+            res.tpHit=true;
+      }
+   }
+
+   // 3) First opposing-side closing candle to the LEFT of the extreme.
+   int referenceIndex=-1;
+
+   for(int i=extremeIndex-1;i>=0;i--)
+   {
+      bool closedUp=(rates[i].close>rates[i].open);
+      bool closedDown=(rates[i].close<rates[i].open);
+
+      if(signal==CRT_BULL && closedUp)
+      {
+         referenceIndex=i;
+         break;
+      }
+
+      if(signal==CRT_BEAR && closedDown)
+      {
+         referenceIndex=i;
+         break;
+      }
+   }
+
+   if(referenceIndex<0)
+      return true;
+
+   res.refFound=true;
+   res.refTime=rates[referenceIndex].time;
+   res.refPrice=rates[referenceIndex].close;
+
+   // 4) Confirmation: a later, fully closed candle closes through it.
+   for(int i=extremeIndex+1;i<copied;i++)
+   {
+      datetime candleClose=rates[i].time+ltfSeconds;
+
+      if(candleClose>now)
+         continue;
+
+      bool through=(signal==CRT_BEAR ?
+                    rates[i].close<res.refPrice :
+                    rates[i].close>res.refPrice);
+
+      if(through)
+      {
+         res.confirmed=true;
+         res.confTime=rates[i].time;
+         res.confClose=rates[i].close;
+
+         break;
+      }
+   }
+
+   return true;
+}
+
+// CISD of the latest CONFIRMED CRT (used for the chart CISD line).
+void UpdateCISD(int stateIndex)
+{
+   if(!InpEnableCISD)
+   {
+      ResetCISDState(stateIndex);
+      return;
+   }
+
+   ENUM_CRT_SIGNAL signal=g_states[stateIndex].confirmedSignal;
+
+   if(signal!=CRT_BULL && signal!=CRT_BEAR)
+   {
+      ResetCISDState(stateIndex);
+      return;
+   }
+
+   CISDResult r;
+
+   if(!ComputeCISD(g_states[stateIndex].symbol,
+                   g_states[stateIndex].timeframe,
+                   signal,
+                   g_states[stateIndex].confirmedC2Time,
+                   0.0,
+                   r) ||
+      !r.refFound)
+   {
+      ResetCISDState(stateIndex);
+      return;
+   }
+
+   g_states[stateIndex].cisdReferenceFound=true;
+   g_states[stateIndex].cisdReferenceTime=r.refTime;
+   g_states[stateIndex].cisdReferencePrice=r.refPrice;
+   g_states[stateIndex].cisdConfirmed=r.confirmed;
+   g_states[stateIndex].cisdConfirmationTime=r.confTime;
+}
+
+//------------------------- HISTORY REMOVE -------------------------//
+void RemoveCRTFromHistory(int index)
+{
+   if(index<0 || index>=g_crtHistoryCount)
+      return;
+
+   for(int i=index;i<g_crtHistoryCount-1;i++)
+      g_crtHistory[i]=g_crtHistory[i+1];
+
+   g_crtHistoryCount--;
+
+   ArrayResize(g_crtHistory,g_crtHistoryCount);
+}
+
+//------------------------- HISTORY ADD -----------------------------//
+void AddCRTToHistory(int stateIndex,
+                     ENUM_CRT_SIGNAL signal,
+                     const MqlRates &c1,
+                     const MqlRates &c2,
+                     datetime c3Time,
+                     datetime c3EndTime)
+{
+   if(signal==CRT_NONE)
+      return;
+
+   for(int i=0;i<g_crtHistoryCount;i++)
+   {
+      if(g_crtHistory[i].symbol==
+            g_states[stateIndex].symbol &&
+         g_crtHistory[i].timeframe==
+            g_states[stateIndex].timeframe &&
+         g_crtHistory[i].c2Time==c2.time)
+      {
+         return;
+      }
+   }
+
+   int limit=InpRecentCRTHistoryPerTF;
+
+   if(limit<1)
+      limit=1;
+
+   ArrayResize(g_crtHistory,g_crtHistoryCount+1);
+
+   int newIndex=g_crtHistoryCount;
+
+   g_crtHistory[newIndex].symbol=
+      g_states[stateIndex].symbol;
+
+   g_crtHistory[newIndex].timeframe=
+      g_states[stateIndex].timeframe;
+
+   g_crtHistory[newIndex].signal=signal;
+
+   g_crtHistory[newIndex].c2Time=c2.time;
+   g_crtHistory[newIndex].c3Time=c3Time;
+   g_crtHistory[newIndex].c3EndTime=c3EndTime;
+
+   g_crtHistory[newIndex].c1High=c1.high;
+   g_crtHistory[newIndex].c1Low=c1.low;
+
+   g_crtHistory[newIndex].c2Open=c2.open;
+   g_crtHistory[newIndex].c2High=c2.high;
+   g_crtHistory[newIndex].c2Low=c2.low;
+
+   g_crtHistory[newIndex].c1Open=c1.open;
+   g_crtHistory[newIndex].c1Close=c1.close;
+   g_crtHistory[newIndex].c2Close=c2.close;
+
+   g_crtHistoryCount++;
+
+   int matchingCount=0;
+
+   for(int i=0;i<g_crtHistoryCount;i++)
+   {
+      if(g_crtHistory[i].symbol==
+            g_states[stateIndex].symbol &&
+         g_crtHistory[i].timeframe==
+            g_states[stateIndex].timeframe)
+      {
+         matchingCount++;
+      }
+   }
+
+   while(matchingCount>limit)
+   {
+      for(int i=0;i<g_crtHistoryCount;i++)
+      {
+         if(g_crtHistory[i].symbol==
+               g_states[stateIndex].symbol &&
+            g_crtHistory[i].timeframe==
+               g_states[stateIndex].timeframe)
+         {
+            RemoveCRTFromHistory(i);
+            matchingCount--;
+            break;
+         }
+      }
+   }
+}
+
+//------------------------- BUILD INITIAL HISTORY -------------------//
+void BuildInitialCRTHistory()
+{
+   ArrayResize(g_crtHistory,0);
+   g_crtHistoryCount=0;
+
+   int historyLimit=InpRecentCRTHistoryPerTF;
+
+   if(historyLimit<1)
+      historyLimit=1;
+
+   int barsToCopy=500;
+
+   if(historyLimit*20+20>barsToCopy)
+      barsToCopy=historyLimit*20+20;
+
+   for(int state=0;state<g_stateCount;state++)
+   {
+      string symbol=g_states[state].symbol;
+      ENUM_TIMEFRAMES tf=g_states[state].timeframe;
+
+      MqlRates rates[];
+      ArraySetAsSeries(rates,true);
+
+      int copied=CopyRates(symbol,tf,0,barsToCopy,rates);
+
+      if(copied<4)
+         continue;
+
+      for(int c2Index=copied-2;c2Index>=1;c2Index--)
+      {
+         int c1Index=c2Index+1;
+         int c3Index=c2Index-1;
+
+         if(c1Index>=copied || c3Index<0)
+            continue;
+
+         ENUM_CRT_SIGNAL signal=
+            ClassifyCRT(rates[c1Index],rates[c2Index]);
+
+         if(signal==CRT_NONE)
+            continue;
+
+         datetime c3Time=rates[c3Index].time;
+         datetime c3End=
+            c3Time+PeriodSeconds(tf);
+
+         AddCRTToHistory(
+            state,
+            signal,
+            rates[c1Index],
+            rates[c2Index],
+            c3Time,
+            c3End
+         );
+      }
+   }
+}
+
+//------------------------- SETUP EVALUATION ------------------------//
+// A setup is a CRT candidate (completed OR still forming) that has
+//  1) swept ONE side of C1 and made a C2 extreme,
+//  2) confirmed CISD on the mapped lower timeframe,
+//  3) touched a valid HTF FVG (always for early setups),
+//  4) a planned reward:risk of at least InpMinRR,
+//  5) reached the required confluence score.
+// It stays active until price trades beyond the C2 extreme (stop loss),
+// reaches the target (optional), or the setup expires.
+//
+// Planned trade (fixed when CISD confirms, so it never "moves"):
+//   Entry = close of the CISD confirmation candle
+//   SL    = C2 extreme (the sweep)
+//   TP    = opposite C1 extreme (TP2 only)
+struct CRTCandidate
+{
+   ENUM_CRT_SIGNAL dir;
+   datetime c2Time;
+   double   c1Open;
+   double   c1High;
+   double   c1Low;
+   double   c1Close;
+   double   c2Open;
+   double   c2High;
+   double   c2Low;
+   double   c2Close;
+   bool     early;
+};
+
+struct SetupEval
+{
+   bool   valid;
+   int    closeReason;     // 0 none, 1 stop loss hit, 2 target hit
+   int    score;
+   bool   cfHTF;
+   bool   cfLiquidity;
+   bool   cfLiqPool;
+   bool   cfLiqSession;
+   bool   cfLiqRejection;
+   int    kzId;
+   bool   cfTrend;
+   bool   cfSMT;
+   double entry;
+   double sl;
+   double tp2;
+   double rr;
+   datetime extremeTime;
+   datetime cisdTime;
+   double   cisdPrice;
+   datetime formTime;
+};
+
+int MaxSetupScore()
+{
+   int m=0;
+   if(InpUseHTFCRTConfluence) m++;
+   if(InpUseKillzones)        m++;
+   // Previous day/week and session sweeps are one combined point.
+   if(InpUseLiquiditySweep || InpUseSessionLiquidity) m++;
+   if(InpUseLiquidityPools)   m++;
+   if(InpUseSMT)              m++;
+   return m;
+}
+
+bool InHourWindow(double hour,int startHour,int endHour)
+{
+   if(startHour==endHour)
+      return false;
+
+   if(startHour<endHour)
+      return (hour>=startHour && hour<endHour);
+
+   return (hour>=startHour || hour<endHour);
+}
+
+// 1 = London killzone, 2 = New York killzone, 0 = none.
+int KillzoneId(datetime serverTime)
+{
+   int offset=(int)(TimeTradeServer()-TimeGMT());
+   offset=((int)MathRound(offset/900.0))*900;
+
+   datetime gmt=serverTime-offset;
+
+   MqlDateTime dt;
+   TimeToStruct(gmt,dt);
+
+   double hour=dt.hour+(dt.min/60.0);
+
+   if(InHourWindow(hour,InpLondonStartGMT,InpLondonEndGMT))
+      return 1;
+
+   if(InHourWindow(hour,InpNYStartGMT,InpNYEndGMT))
+      return 2;
+
+   return 0;
+}
+
+// Bull CRT: C2 took out the previous day/week LOW.
+// Bear CRT: C2 took out the previous day/week HIGH.
+bool CheckLiquiditySweep(int stateIndex,
+                         ENUM_CRT_SIGNAL dir,
+                         datetime c2Time,
+                         double c2High,
+                         double c2Low)
+{
+   string symbol=g_states[stateIndex].symbol;
+   ENUM_TIMEFRAMES tf=g_states[stateIndex].timeframe;
+   if(tf==PERIOD_W1 || tf==PERIOD_MN1)
+      return false;
+
+   // Check the most recently completed daily and weekly reference candles.
+   ENUM_TIMEFRAMES refs[2]={PERIOD_D1,PERIOD_W1};
+   for(int r=0;r<2;r++)
+   {
+      int shift=iBarShift(symbol,refs[r],c2Time,false);
+      if(shift<0)
+         continue;
+
+      MqlRates prev[];
+      ArraySetAsSeries(prev,true);
+      if(CopyRates(symbol,refs[r],shift+1,1,prev)<1)
+         continue;
+
+      if(dir==CRT_BULL && c2Low<prev[0].low)
+         return true;
+      if(dir==CRT_BEAR && c2High>prev[0].high)
+         return true;
+   }
+   return false;
+}
+
+// Detect a sweep of a confirmed swing or a cluster of equal highs/lows.
+// The C2 must trade beyond the level and close back through it.
+bool CheckLiquidityPoolSweep(int stateIndex,ENUM_CRT_SIGNAL dir,
+                              datetime c2Time,double c2High,double c2Low,
+                              double c2Close)
+{
+   string symbol=g_states[stateIndex].symbol;
+   ENUM_TIMEFRAMES tf=g_states[stateIndex].timeframe;
+   int lookback=InpLiquidityLookback;
+   if(lookback<12) lookback=12;
+   if(lookback>200) lookback=200;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates,true);
+   int c2Shift=iBarShift(symbol,tf,c2Time,false);
+   if(c2Shift<0) return false;
+   int copied=CopyRates(symbol,tf,c2Shift,lookback+8,rates);
+   if(copied<8) return false;
+
+   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double avgRange=0.0;
+   int avgCount=0;
+   for(int i=1;i<copied && i<=20;i++)
+   {
+      avgRange+=(rates[i].high-rates[i].low);
+      avgCount++;
+   }
+   if(avgCount<=0) return false;
+   avgRange/=avgCount;
+   double tolerance=MathMax(point*2.0,avgRange*MathMax(0.01,InpLiquidityToleranceATR));
+
+   if(dir==CRT_BULL)
+   {
+      // Equal lows: at least two prior lows clustered near the swept level.
+      int equalCount=0;
+      double cluster=0.0;
+      for(int i=1;i<copied && i<=lookback;i++)
+      {
+         if(rates[i].low>c2Low && rates[i].low-c2Low<=tolerance*2.0)
+         {
+            equalCount++;
+            cluster+=rates[i].low;
+         }
+      }
+      if(equalCount>=2 && c2Close>cluster/equalCount)
+         return true;
+
+      // Confirmed swing low: two candles on either side are already closed.
+      for(int i=3;i<copied-2 && i<=lookback;i++)
+      {
+         bool pivot=(rates[i].low<rates[i-1].low && rates[i].low<rates[i-2].low &&
+                     rates[i].low<=rates[i+1].low && rates[i].low<=rates[i+2].low);
+         if(pivot && c2Low<rates[i].low && c2Close>rates[i].low)
+            return true;
+      }
+   }
+   else if(dir==CRT_BEAR)
+   {
+      int equalCount=0;
+      double cluster=0.0;
+      for(int i=1;i<copied && i<=lookback;i++)
+      {
+         if(rates[i].high<c2High && c2High-rates[i].high<=tolerance*2.0)
+         {
+            equalCount++;
+            cluster+=rates[i].high;
+         }
+      }
+      if(equalCount>=2 && c2Close<cluster/equalCount)
+         return true;
+
+      for(int i=3;i<copied-2 && i<=lookback;i++)
+      {
+         bool pivot=(rates[i].high>rates[i-1].high && rates[i].high>rates[i-2].high &&
+                     rates[i].high>=rates[i+1].high && rates[i].high>=rates[i+2].high);
+         if(pivot && c2High>rates[i].high && c2Close<rates[i].high)
+            return true;
+      }
+   }
+   return false;
+}
+
+// Session range sweep. Session times are GMT; broker/server offset is
+// derived from the same server-to-GMT conversion used by KillzoneId().
+bool CheckSessionLiquiditySweep(int stateIndex,ENUM_CRT_SIGNAL dir,
+                                datetime c2Time,double c2High,double c2Low,
+                                double c2Close)
+{
+   string symbol=g_states[stateIndex].symbol;
+   ENUM_TIMEFRAMES tf=g_states[stateIndex].timeframe;
+   int seconds=PeriodSeconds(tf);
+   if(seconds<=0 || seconds>=PeriodSeconds(PERIOD_D1)) return false;
+
+   int offset=(int)(TimeTradeServer()-TimeGMT());
+   offset=((int)MathRound(offset/900.0))*900;
+   datetime gmtC2=c2Time-offset;
+   MqlDateTime day;
+   TimeToStruct(gmtC2,day);
+   day.hour=0; day.min=0; day.sec=0;
+   datetime gmtDay=StructToTime(day);
+   datetime serverStart=gmtDay+offset;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates,false);
+   int copied=CopyRates(symbol,tf,serverStart-86400,c2Time,rates);
+   if(copied<2) return false;
+
+   double asiaHigh=-DBL_MAX,asiaLow=DBL_MAX;
+   double londonHigh=-DBL_MAX,londonLow=DBL_MAX;
+   double priorNYHigh=-DBL_MAX,priorNYLow=DBL_MAX;
+   double nyHigh=-DBL_MAX,nyLow=DBL_MAX;
+   bool hasAsia=false,hasLondon=false,hasPriorNY=false,hasNY=false;
+   for(int i=0;i<copied;i++)
+   {
+      if(rates[i].time>=c2Time)
+         continue;
+      datetime barGMT=rates[i].time-offset;
+      MqlDateTime bt;
+      TimeToStruct(barGMT,bt);
+      double hour=bt.hour+(bt.min/60.0);
+      if(barGMT>=gmtDay-86400 && barGMT<gmtDay && InHourWindow(hour,InpNYStartGMT,InpNYEndGMT))
+      {
+         priorNYHigh=MathMax(priorNYHigh,rates[i].high);
+         priorNYLow=MathMin(priorNYLow,rates[i].low);
+         hasPriorNY=true;
+      }
+      else if(barGMT>=gmtDay && InHourWindow(hour,InpAsiaStartGMT,InpAsiaEndGMT))
+      {
+         asiaHigh=MathMax(asiaHigh,rates[i].high);
+         asiaLow=MathMin(asiaLow,rates[i].low);
+         hasAsia=true;
+      }
+      else if(barGMT>=gmtDay && InHourWindow(hour,InpLondonStartGMT,InpLondonEndGMT))
+      {
+         londonHigh=MathMax(londonHigh,rates[i].high);
+         londonLow=MathMin(londonLow,rates[i].low);
+         hasLondon=true;
+      }
+      else if(barGMT>=gmtDay && InHourWindow(hour,InpNYStartGMT,InpNYEndGMT))
+      {
+         nyHigh=MathMax(nyHigh,rates[i].high);
+         nyLow=MathMin(nyLow,rates[i].low);
+         hasNY=true;
+      }
+   }
+
+   if(dir==CRT_BULL)
+   {
+      if(hasAsia && c2Low<asiaLow && c2Close>asiaLow) return true;
+      if(hasLondon && c2Low<londonLow && c2Close>londonLow) return true;
+      if(hasPriorNY && c2Low<priorNYLow && c2Close>priorNYLow) return true;
+      if(hasNY && c2Low<nyLow && c2Close>nyLow) return true;
+   }
+   else if(dir==CRT_BEAR)
+   {
+      if(hasAsia && c2High>asiaHigh && c2Close<asiaHigh) return true;
+      if(hasLondon && c2High>londonHigh && c2Close<londonHigh) return true;
+      if(hasPriorNY && c2High>priorNYHigh && c2Close<priorNYHigh) return true;
+      if(hasNY && c2High>nyHigh && c2Close<nyHigh) return true;
+   }
+   return false;
+}
+
+// A wick-rejection confluence. It does not replace the CRT/CISD rules.
+bool HasLiquidityRejection(ENUM_CRT_SIGNAL dir,double c2Open,
+                           double c2High,double c2Low,double c2Close)
+{
+   double body=MathAbs(c2Close-c2Open);
+   double range=c2High-c2Low;
+   if(range<=0.0) return false;
+   double minWick=MathMax(body*1.2,range*0.25);
+   if(dir==CRT_BULL)
+   {
+      double lowerWick=MathMin(c2Open,c2Close)-c2Low;
+      return (c2Close>c2Open && lowerWick>=minWick);
+   }
+   if(dir==CRT_BEAR)
+   {
+      double upperWick=c2High-MathMax(c2Open,c2Close);
+      return (c2Close<c2Open && upperWick>=minWick);
+   }
+   return false;
+}
+
+// Nearest higher timeframe shows a CRT in the same direction.
+// Early setups also accept a higher-timeframe CRT that is forming.
+bool HTFConfluence(int stateIndex,ENUM_CRT_SIGNAL dir,bool early)
+{
+   int htf=FindNearestHigherState(stateIndex);
+
+   if(htf<0)
+      return false;
+
+   if(g_states[htf].confirmedSignal==dir)
+      return true;
+
+   if(early && g_states[htf].advancedSignal==dir)
+      return true;
+
+   return false;
+}
+
+// Trend filter: the last closed candle BEFORE C2 is above (bull) or
+// below (bear) its EMA. Optionally measured on the next higher timeframe.
+bool CheckTrend(int stateIndex,ENUM_CRT_SIGNAL dir,datetime c2Time)
+{
+   string symbol=g_states[stateIndex].symbol;
+   ENUM_TIMEFRAMES tf=g_states[stateIndex].timeframe;
+
+   if(InpTrendOnHigherTF)
+   {
+      ENUM_TIMEFRAMES higher=FindNearestHigherTF(tf);
+
+      if(higher!=PERIOD_CURRENT)
+         tf=higher;
+   }
+
+   int period=MathMax(2,InpTrendEMAPeriod);
+   int need=MathMax(20,period*4);
+
+   int shift=iBarShift(symbol,tf,c2Time,false);
+
+   if(shift<0)
+      return false;
+
+   double closes[];
+   ArraySetAsSeries(closes,true);
+
+   int copied=CopyClose(symbol,tf,shift+1,need,closes);
+
+   if(copied<period+2)
+      return false;
+
+   double k=2.0/(period+1.0);
+   double ema=closes[copied-1];
+
+   for(int j=copied-2;j>=0;j--)
+      ema=closes[j]*k+ema*(1.0-k);
+
+   if(dir==CRT_BULL)
+      return (closes[0]>ema);
+
+   if(dir==CRT_BEAR)
+      return (closes[0]<ema);
+
+   return false;
+}
+
+// Partner symbol from the "SYMBOL:PARTNER,..." list.
+string GetSMTPartner(string symbol)
+{
+   string pairs[];
+   int count=StringSplit(InpSMTPairs,',',pairs);
+
+   for(int k=0;k<count;k++)
+   {
+      string kv[];
+
+      if(StringSplit(pairs[k],':',kv)!=2)
+         continue;
+
+      string a=kv[0];
+      string b=kv[1];
+
+      StringTrimLeft(a);
+      StringTrimRight(a);
+      StringTrimLeft(b);
+      StringTrimRight(b);
+
+      if(a==symbol)
+         return b;
+   }
+
+   return "";
+}
+
+// SMT divergence: our symbol swept C1's extreme, the correlated
+// partner did NOT sweep its own C1 extreme in the same candle.
+bool CheckSMT(int stateIndex,ENUM_CRT_SIGNAL dir,datetime c2Time)
+{
+   string symbol=g_states[stateIndex].symbol;
+   ENUM_TIMEFRAMES tf=g_states[stateIndex].timeframe;
+   string partner=GetSMTPartner(symbol);
+
+   if(partner=="" || partner==symbol || !SymbolSelect(partner,true))
+      return false;
+
+   int primaryShift=iBarShift(symbol,tf,c2Time,false);
+   int partnerShift=iBarShift(partner,tf,c2Time,false);
+   if(primaryShift<0 || partnerShift<0)
+      return false;
+
+   MqlRates primary[],paired[];
+   ArraySetAsSeries(primary,true);
+   ArraySetAsSeries(paired,true);
+   if(CopyRates(symbol,tf,primaryShift,2,primary)<2 ||
+      CopyRates(partner,tf,partnerShift,2,paired)<2)
+      return false;
+
+   // Both instruments must have the exact same C2 and C1 candle times.
+   if(primary[0].time!=c2Time || paired[0].time!=c2Time ||
+      primary[1].time!=paired[1].time)
+      return false;
+
+   // Primary must sweep its C1 extreme; the paired instrument must not.
+   if(dir==CRT_BULL)
+      return (primary[0].low<primary[1].low &&
+              paired[0].low>=paired[1].low);
+
+   if(dir==CRT_BEAR)
+      return (primary[0].high>primary[1].high &&
+              paired[0].high<=paired[1].high);
+
+   return false;
+}
+
+//------------------------- LABELS / TOOLTIP ------------------------//
+// Fills tags[] with the optional confluences that are present.
+int BuildTags(int i,string &tags[])
+{
+   ArrayResize(tags,0);
+
+   int n=0;
+
+   if(g_states[i].cfHTF)
+   {
+      ArrayResize(tags,n+1);
+      tags[n]="HTF";
+      n++;
+   }
+
+   if(g_states[i].kzId>0)
+   {
+      ArrayResize(tags,n+1);
+      tags[n]=(g_states[i].kzId==1 ? "LDN" : "NY");
+      n++;
+   }
+
+   if(g_states[i].cfLiquidity)
+   {
+      ArrayResize(tags,n+1);
+      tags[n]="LIQUIDITY";
+      n++;
+   }
+
+   if(g_states[i].cfLiqPool)
+   {
+      ArrayResize(tags,n+1);
+      tags[n]="POOL";
+      n++;
+   }
+
+
+   if(g_states[i].cfLiqRejection)
+   {
+      ArrayResize(tags,n+1);
+      tags[n]="REJECT";
+      n++;
+   }
+
+   if(g_states[i].cfSMT)
+   {
+      ArrayResize(tags,n+1);
+      tags[n]="SMT";
+      n++;
+   }
+
+   if(g_states[i].cfTrend)
+   {
+      ArrayResize(tags,n+1);
+      tags[n]="TREND";
+      n++;
+   }
+
+   return n;
+}
+
+// All tags, each with a leading space (used in alerts).
+string ConfluenceText(int i)
+{
+   string tags[];
+   int n=BuildTags(i,tags);
+
+   string text="";
+
+   for(int k=0;k<n;k++)
+      text+=" "+tags[k];
+
+   return text;
+}
+
+// First maxTags tags, then "+N" for the rest (used on the badge).
+string ConfluenceShort(int i,int maxTags)
+{
+   string tags[];
+   int n=BuildTags(i,tags);
+
+   if(n==0)
+      return "base setup";
+
+   string text="";
+
+   for(int k=0;k<n && k<maxTags;k++)
+   {
+      if(k>0)
+         text+=" ";
+
+      text+=tags[k];
+   }
+
+   if(n>maxTags)
+      text+=" +"+IntegerToString(n-maxTags);
+
+   return text;
+}
+
+string RRText(int i)
+{
+   if(g_states[i].setupRR>0.0)
+      return "RR "+DoubleToString(g_states[i].setupRR,1);
+
+   return "RR --";
+}
+
+string TickMark(bool value)
+{
+   return (value ? "[+] " : "[ ] ");
+}
+
+// Plain-language checklist shown when hovering a badge.
+string SetupTooltip(int i)
+{
+   string symbol=g_states[i].symbol;
+   int digits=(int)SymbolInfoInteger(symbol,SYMBOL_DIGITS);
+
+   bool bull=(g_states[i].setupDir==CRT_BULL);
+
+   string t=symbol+" "+TimeframeName(g_states[i].timeframe)+" "+
+            (bull ? "BULLISH" : "BEARISH")+" setup"+
+            (g_states[i].setupEarly ? " (EARLY - C2 still forming)" :
+                                      " (C2 closed)")+"\n";
+
+   t+="Score "+IntegerToString(g_states[i].setupScore)+"/"+
+      IntegerToString(MaxSetupScore())+"   Planned "+
+      RRText(i)+"\n";
+
+   t+="Entry "+DoubleToString(g_states[i].setupEntry,digits)+
+      "   SL "+DoubleToString(g_states[i].setupSL,digits)+"\n";
+
+   t+="TP2 "+DoubleToString(g_states[i].setupTP,digits)+"\n";
+
+   t+="[+] C1 swept one side, C2 closed back inside\n";
+   t+="[+] CISD confirmed on the lower timeframe\n";
+   t+="[+] C2 touched an HTF fair value gap\n";
+
+   if(InpUseHTFCRTConfluence)
+      t+=TickMark(g_states[i].cfHTF)+"HTF CRT in the same direction\n";
+
+   if(InpUseKillzones)
+      t+=TickMark(g_states[i].kzId>0)+"CISD inside London / New York killzone\n";
+
+
+   if(InpUseLiquiditySweep || InpUseSessionLiquidity)
+      t+=TickMark(g_states[i].cfLiquidity)+"Session / PDH / PDL / PWH / PWL liquidity swept (one point maximum)\n";
+
+   if(InpUseLiquidityPools)
+      t+=TickMark(g_states[i].cfLiqPool)+"Equal highs/lows or confirmed swing liquidity swept\n";
+
+
+   if(InpUseSweepRejection)
+      t+=TickMark(g_states[i].cfLiqRejection)+"C2 shows a strong rejection wick\n";
+
+   if(InpUseSMT)
+      t+=TickMark(g_states[i].cfSMT)+"SMT divergence with correlated pair\n";
+
+   if(InpUseTrendEMA)
+      t+=(g_states[i].cfTrend ? "[BONUS] With EMA 24 trend\n" : "[BONUS] Not aligned with EMA 24\n");
+
+   return t;
+}
+
+// Most recent CRT in the history list for this symbol/timeframe.
+int FindLatestHistory(string symbol,ENUM_TIMEFRAMES tf)
+{
+   int best=-1;
+   datetime bestTime=0;
+
+   for(int k=0;k<g_crtHistoryCount;k++)
+   {
+      if(g_crtHistory[k].symbol!=symbol ||
+         g_crtHistory[k].timeframe!=tf)
+         continue;
+
+      if(g_crtHistory[k].c2Time>bestTime)
+      {
+         bestTime=g_crtHistory[k].c2Time;
+         best=k;
+      }
+   }
+
+   return best;
+}
+
+// A setup expires InpSetupMaxAgeCandles CRT candles after C2.
+bool IsCandidateFresh(int stateIndex,datetime c2Time)
+{
+   int shift=iBarShift(g_states[stateIndex].symbol,
+                       g_states[stateIndex].timeframe,
+                       c2Time,
+                       false);
+
+   if(shift<0)
+      return false;
+
+   int maxAge=InpSetupMaxAgeCandles;
+
+   if(maxAge<1)
+      maxAge=1;
+
+   return (shift<=maxAge);
+}
+
+//------------------------- JOURNAL / STATS -------------------------//
+// Every setup that ends at its stop loss (loss) or its target (win)
+// is written to a CSV file and counted per confluence, so you can
+// see which confluences really improve the win rate on YOUR data.
+#define JN_FLAGS 11
+
+int g_jnWins=0;
+int g_jnLoss=0;
+double g_jnNetR=0.0;
+int g_jnLast[5];
+int g_jnLastCount=0;
+int g_jnFlagWin[JN_FLAGS];
+int g_jnFlagLoss[JN_FLAGS];
+int g_jnNoFlagWin[JN_FLAGS];
+int g_jnNoFlagLoss[JN_FLAGS];
+
+string g_jnNames[JN_FLAGS]={"HTF","KILLZONE","EXTERNAL LIQUIDITY","DOJI C1",
+                            "TREND","DISPLACEMENT","SMT","EARLY",
+                            "LIQUIDITY POOL","SESSION LIQUIDITY","SWEEP REJECTION"};
+
+void JournalReset()
+{
+   g_jnWins=0;
+   g_jnLoss=0;
+   g_jnNetR=0.0;
+   g_jnLastCount=0;
+
+   for(int q=0;q<5;q++)
+      g_jnLast[q]=0;
+
+   for(int k=0;k<JN_FLAGS;k++)
+   {
+      g_jnFlagWin[k]=0;
+      g_jnFlagLoss[k]=0;
+      g_jnNoFlagWin[k]=0;
+      g_jnNoFlagLoss[k]=0;
+   }
+}
+
+void JournalTally(bool win,const int &flags[],double rr)
+{
+   if(win)
+      g_jnWins++;
+   else
+      g_jnLoss++;
+
+   // Net result in R: a win pays the planned RR, a loss costs 1R.
+   g_jnNetR+=(win ? MathMax(0.0,rr) : -1.0);
+
+   // Keep the last five results (oldest first).
+   if(g_jnLastCount<5)
+   {
+      g_jnLast[g_jnLastCount]=(win ? 1 : 0);
+      g_jnLastCount++;
+   }
+   else
+   {
+      for(int q=0;q<4;q++)
+         g_jnLast[q]=g_jnLast[q+1];
+
+      g_jnLast[4]=(win ? 1 : 0);
+   }
+
+   for(int k=0;k<JN_FLAGS;k++)
+   {
+      if(flags[k]==1)
+      {
+         if(win) g_jnFlagWin[k]++; else g_jnFlagLoss[k]++;
+      }
+      else
+      {
+         if(win) g_jnNoFlagWin[k]++; else g_jnNoFlagLoss[k]++;
+      }
+   }
+}
+
+string WinPct(int wins,int losses)
+{
+   int total=wins+losses;
+
+   if(total<=0)
+      return "n/a";
+
+   return DoubleToString((100.0*wins)/total,0)+"%";
+}
+
+string StatsLine()
+{
+   if(g_jnWins+g_jnLoss<=0)
+      return "NO CLOSED SETUPS YET";
+
+   return "WIN RATE "+WinPct(g_jnWins,g_jnLoss)+"    "+
+          IntegerToString(g_jnWins)+"W "+
+          IntegerToString(g_jnLoss)+"L    NET "+
+          (g_jnNetR>=0.0 ? "+" : "")+
+          DoubleToString(g_jnNetR,1)+"R";
+}
+
+void JournalPrint()
+{
+   Print("GloryAlgo STATS | closed setups: ",g_jnWins+g_jnLoss,
+         " | win rate ",WinPct(g_jnWins,g_jnLoss),
+         " (",g_jnWins,"W ",g_jnLoss,"L)");
+
+   for(int k=0;k<JN_FLAGS;k++)
+   {
+      Print("   ",g_jnNames[k],
+            " | with: ",g_jnFlagWin[k],"W ",g_jnFlagLoss[k],"L (",
+            WinPct(g_jnFlagWin[k],g_jnFlagLoss[k]),")",
+            " | without: ",g_jnNoFlagWin[k],"W ",g_jnNoFlagLoss[k],"L (",
+            WinPct(g_jnNoFlagWin[k],g_jnNoFlagLoss[k]),")");
+   }
+}
+
+void JournalLoad()
+{
+   JournalReset();
+
+   if(!InpJournal)
+      return;
+
+   int handle=FileOpen(InpJournalFile,
+                       FILE_READ|FILE_CSV|FILE_ANSI|
+                       FILE_SHARE_READ|FILE_SHARE_WRITE,
+                       ',');
+
+   if(handle==INVALID_HANDLE)
+      return;
+
+   while(!FileIsEnding(handle))
+   {
+      string cell[20];
+
+      for(int c=0;c<20;c++)
+         cell[c]=FileReadString(handle);
+
+      if(cell[0]=="" || cell[0]=="time")
+         continue;
+
+      int flags[JN_FLAGS];
+
+      flags[0]=(int)StringToInteger(cell[7]);    // htf
+      flags[1]=(int)StringToInteger(cell[8]);    // killzone
+      flags[2]=(int)StringToInteger(cell[9]);    // liquidity
+      flags[3]=(int)StringToInteger(cell[10]);   // doji
+      flags[4]=(int)StringToInteger(cell[11]);   // trend
+      flags[5]=(int)StringToInteger(cell[12]);   // displacement
+      flags[6]=(int)StringToInteger(cell[13]);   // smt
+      flags[7]=(int)StringToInteger(cell[4]);    // early
+      flags[8]=(int)StringToInteger(cell[14]);   // liquidity pool
+      flags[9]=(int)StringToInteger(cell[15]);   // session liquidity
+      flags[10]=(int)StringToInteger(cell[16]);  // sweep rejection
+
+      JournalTally(cell[17]=="W",flags,StringToDouble(cell[6]));
+   }
+
+   FileClose(handle);
+}
+
+// Called with the OLD setup data still in the state (before it is cleared).
+void JournalRecord(int i,int reason)
+{
+   if(reason!=1 && reason!=2)
+      return;
+
+   bool win=(reason==2);
+
+   int flags[JN_FLAGS];
+
+   flags[0]=(g_states[i].cfHTF ? 1 : 0);
+   flags[1]=(g_states[i].kzId>0 ? 1 : 0);
+   flags[2]=(g_states[i].cfLiquidity ? 1 : 0);
+   flags[3]=0;
+   flags[4]=(g_states[i].cfTrend ? 1 : 0);
+   flags[5]=0;
+   flags[6]=(g_states[i].cfSMT ? 1 : 0);
+   flags[7]=(g_states[i].setupEarly ? 1 : 0);
+   flags[8]=(g_states[i].cfLiqPool ? 1 : 0);
+   flags[9]=0; // liquidity is logged once in flags[2]
+   flags[10]=(g_states[i].cfLiqRejection ? 1 : 0);
+
+   JournalTally(win,flags,g_states[i].setupRR);
+
+   Print("GloryAlgo RESULT | ",g_states[i].symbol," ",
+         TimeframeName(g_states[i].timeframe)," ",
+         (g_states[i].setupDir==CRT_BULL ? "BULLISH" : "BEARISH"),
+         " | ",(win ? "WIN" : "LOSS"),
+         " | win rate ",WinPct(g_jnWins,g_jnLoss),
+         " (",g_jnWins,"W ",g_jnLoss,"L)");
+
+   if(!InpJournal)
+      return;
+
+   int handle=FileOpen(InpJournalFile,
+                       FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|
+                       FILE_SHARE_READ|FILE_SHARE_WRITE,
+                       ',');
+
+   if(handle==INVALID_HANDLE)
+   {
+      Print("GloryAlgo: could not open journal file. Error: ",
+            GetLastError());
+      return;
+   }
+
+   if(FileSize(handle)==0)
+   {
+      FileWrite(handle,"time","symbol","tf","dir","early","score","rr",
+                "htf","kz","external_liq","doji","trend","disp","smt",
+                "liq_pool","session_liq","sweep_rejection","result","reason","c2_time");
+   }
+
+   FileSeek(handle,0,SEEK_END);
+
+   FileWrite(handle,
+             TimeToString(TimeCurrent(),
+                          TIME_DATE|TIME_MINUTES|TIME_SECONDS),
+             g_states[i].symbol,
+             TimeframeName(g_states[i].timeframe),
+             (g_states[i].setupDir==CRT_BULL ? "BULL" : "BEAR"),
+             flags[7],
+             g_states[i].setupScore,
+             DoubleToString(g_states[i].setupRR,2),
+             flags[0],flags[1],flags[2],flags[3],
+             flags[4],flags[5],flags[6],
+             flags[8],flags[9],flags[10],
+             (win ? "W" : "L"),
+             (win ? "TARGET" : "STOP"),
+             TimeToString(g_states[i].setupC2Time,TIME_DATE|TIME_MINUTES|TIME_SECONDS));
+
+   FileClose(handle);
+}
+
+//------------------------- ALERTS ----------------------------------//
+void SendSetupAlert(int stateIndex)
+{
+   string direction=
+      (g_states[stateIndex].setupDir==CRT_BULL ?
+       "BULLISH" : "BEARISH");
+
+   string message="GloryAlgo SETUP | "+
+                  g_states[stateIndex].symbol+" | "+
+                  TimeframeName(g_states[stateIndex].timeframe)+" | "+
+                  direction+" | "+
+                  IntegerToString(g_states[stateIndex].setupScore)+"/"+
+                  IntegerToString(MaxSetupScore())+" | "+
+                  RRText(stateIndex)+
+                  ConfluenceText(stateIndex);
+
+   if(g_states[stateIndex].setupEarly)
+      message+=" | EARLY";
+
+   message+=" | C2="+TimeToString(g_states[stateIndex].setupC2Time,
+                                    TIME_DATE|TIME_MINUTES);
+   Alert(message);
+
+   if(InpEnablePushNotifications)
+      SendNotification(message);
+}
+
+void SendCloseAlert(int stateIndex,ENUM_CRT_SIGNAL dir,int reason)
+{
+   string why="CRT INVALIDATED";
+
+   if(reason==1)
+      why="STOP LOSS HIT";
+   else if(reason==2)
+      why="TARGET HIT";
+
+   string message="GloryAlgo SETUP CLOSED | "+
+                  g_states[stateIndex].symbol+" | "+
+                  TimeframeName(g_states[stateIndex].timeframe)+" | "+
+                  (dir==CRT_BULL ? "BULLISH" : "BEARISH")+" | "+
+                  why+" | C2="+
+                  TimeToString(g_states[stateIndex].setupC2Time,
+                               TIME_DATE|TIME_MINUTES);
+
+   Alert(message);
+
+   if(InpEnablePushNotifications)
+      SendNotification(message);
+}
+
+//------------------------- EVALUATE ONE CANDIDATE ------------------//
+void EvaluateCandidate(int i,const CRTCandidate &c,SetupEval &ev)
+{
+   ev.valid=false;
+   ev.closeReason=0;
+   ev.score=0;
+   ev.cfHTF=false;
+   ev.cfLiquidity=false;
+   ev.cfLiqPool=false;
+   ev.cfLiqSession=false;
+   ev.cfLiqRejection=false;
+   ev.kzId=0;
+   ev.cfTrend=false;
+   ev.cfSMT=false;
+   ev.entry=0.0;
+   ev.sl=0.0;
+   ev.tp2=0.0;
+   ev.rr=-1.0;
+   ev.extremeTime=0;
+   ev.cisdTime=0;
+   ev.cisdPrice=0.0;
+   ev.formTime=0;
+
+   ENUM_CRT_SIGNAL dir=c.dir;
+
+   if(dir!=CRT_BULL && dir!=CRT_BEAR)
+      return;
+
+   string symbol=g_states[i].symbol;
+   ENUM_TIMEFRAMES tf=g_states[i].timeframe;
+
+   // Do not recreate a CRT setup whose C2 candidate already reached a
+   // terminal state (SL, TP, invalidation/expiry) during this EA run.
+   if(IsSetupKeyClosed(symbol,tf,dir,c.c2Time))
+      return;
+
+   double tp2=(dir==CRT_BULL ? c.c1High : c.c1Low);
+
+   CISDResult cr;
+
+   if(!ComputeCISD(symbol,tf,dir,c.c2Time,tp2,cr))
+      return;
+
+   if(!cr.extremeFound)
+      return;
+
+   // Price already took out the stop loss / reached the target.
+   if(cr.slBreached)
+   {
+      ev.closeReason=1;
+      return;
+   }
+
+   if(cr.tpHit && InpDismissOnTP)
+   {
+      ev.closeReason=2;
+      return;
+   }
+
+   // CISD is mandatory for EVERY setup. The input toggle only controls
+   // CISD chart-state/level display; it cannot bypass setup confirmation.
+   if(!cr.refFound || !cr.confirmed)
+      return;
+
+   // Planned trade: entry at the CISD confirmation close.
+   double bid=SymbolInfoDouble(symbol,SYMBOL_BID);
+   double ask=SymbolInfoDouble(symbol,SYMBOL_ASK);
+
+   double entry=0.0;
+
+   if(cr.confirmed && cr.confClose>0.0)
+      entry=cr.confClose;
+   else
+      entry=(dir==CRT_BULL ? ask : bid);
+
+   double sl=cr.extremePrice;
+   double risk=(dir==CRT_BULL ? entry-sl : sl-entry);
+   double reward=(dir==CRT_BULL ? tp2-entry : entry-tp2);
+
+   if(entry<=0.0 || risk<=0.0 || reward<=0.0)
+      return;
+
+   double rr=reward/risk;
+
+   // Hard filter: not enough reward for the risk.
+   if(InpMinRR>0.0 && rr<InpMinRR)
+      return;
+
+   // Hard filter: against the EMA trend.
+   bool trendOK=false;
+
+   if(InpUseTrendEMA)
+      trendOK=CheckTrend(i,dir,c.c2Time); // informational bonus only; never blocks a setup
+
+   // HTF FVG touched by C2 (always required for early setups).
+   if(c.early || InpSetupRequireFVG)
+   {
+      bool fvg=false;
+
+      if(!c.early && c.c2Time==g_states[i].confirmedC2Time)
+      {
+         fvg=g_states[i].confirmedFVGPresent;
+      }
+      else if(!c.early && c.c2Time==g_states[i].fvgCacheC2)
+      {
+         fvg=g_states[i].fvgCacheVal;
+      }
+      else
+      {
+         MqlRates c2Bar;
+         ZeroMemory(c2Bar);
+
+         c2Bar.time=c.c2Time;
+         c2Bar.high=c.c2High;
+         c2Bar.low=c.c2Low;
+
+         fvg=CheckCRTFVG(i,dir,c2Bar);
+
+         if(!c.early)
+         {
+            g_states[i].fvgCacheC2=c.c2Time;
+            g_states[i].fvgCacheVal=fvg;
+         }
+      }
+
+      if(!fvg)
+         return;
+   }
+
+   // ---------------- score ----------------
+   int score=0;
+
+   if(InpUseHTFCRTConfluence && HTFConfluence(i,dir,c.early))
+   {
+      ev.cfHTF=true;
+      score++;
+   }
+
+   if(InpUseKillzones &&
+      PeriodSeconds(tf)<PeriodSeconds(PERIOD_D1))
+   {
+      datetime refTime=(cr.confTime>0 ? cr.confTime : TimeCurrent());
+
+      int kz=KillzoneId(refTime);
+
+      if(kz>0)
+      {
+         ev.kzId=kz;
+         score++;
+      }
+   }
+
+
+   if(InpUseLiquidityPools &&
+      CheckLiquidityPoolSweep(i,dir,c.c2Time,c.c2High,c.c2Low,c.c2Close))
+   {
+      ev.cfLiqPool=true;
+      score++;
+   }
+
+   // Session and external (PDH/PDL/PWH/PWL) sweeps share ONE score point.
+   bool externalSweep=false;
+   bool sessionSweep=false;
+   if(InpUseLiquiditySweep)
+      externalSweep=CheckLiquiditySweep(i,dir,c.c2Time,c.c2High,c.c2Low);
+   if(InpUseSessionLiquidity)
+      sessionSweep=CheckSessionLiquiditySweep(i,dir,c.c2Time,c.c2High,c.c2Low,c.c2Close);
+   if(externalSweep || sessionSweep)
+   {
+      ev.cfLiquidity=true;
+      ev.cfLiqSession=sessionSweep;
+      score++;
+   }
+
+
+   if(InpUseSweepRejection &&
+      HasLiquidityRejection(dir,c.c2Open,c.c2High,c.c2Low,c.c2Close))
+      ev.cfLiqRejection=true; // bonus tag only
+
+   if(InpUseTrendEMA && trendOK)
+      ev.cfTrend=true; // EMA 24 is informational only; no score point
+
+   if(InpUseSMT && CheckSMT(i,dir,c.c2Time))
+   {
+      ev.cfSMT=true;
+      score++;
+   }
+
+   int minScore=(c.early ? InpEarlyMinScore : InpMinSetupScore);
+
+   if(score<minScore)
+      return;
+
+   ev.valid=true;
+   ev.score=score;
+   ev.entry=entry;
+   ev.sl=sl;
+   ev.tp2=tp2;
+   ev.rr=rr;
+   ev.extremeTime=cr.extremeTime;
+   ev.cisdTime=cr.refTime;
+   ev.cisdPrice=cr.refPrice;
+
+   int ltfSeconds=PeriodSeconds(GetCISDTimeframe(tf));
+
+   ev.formTime=((cr.confirmed && cr.confTime>0) ?
+                cr.confTime+ltfSeconds : c.c2Time);
+}
+
+//------------------------- UPDATE SETUP ----------------------------//
+void UpdateSetup(int i)
+{
+   string symbol=g_states[i].symbol;
+   ENUM_TIMEFRAMES tf=g_states[i].timeframe;
+
+   // What the state held before this scan.
+   bool wasActive=g_states[i].setupActive;
+   bool oldEarly=g_states[i].setupEarly;
+   ENUM_CRT_SIGNAL oldDir=g_states[i].setupDir;
+   datetime oldKey=g_states[i].setupC2Time;
+
+   SetupEval best;
+   bool found=false;
+   bool foundEarly=false;
+   ENUM_CRT_SIGNAL foundDir=CRT_NONE;
+   datetime foundKey=0;
+
+   int closeReason=0;
+   datetime closeKey=0;
+
+   // 1) Latest completed CRT (valid until SL / TP / expiry).
+   int h=FindLatestHistory(symbol,tf);
+
+   if(h>=0)
+   {
+      CRTHistory item=g_crtHistory[h];
+
+      if((item.signal==CRT_BULL || item.signal==CRT_BEAR) &&
+         IsCandidateFresh(i,item.c2Time))
+      {
+         CRTCandidate cand;
+
+         cand.dir=item.signal;
+         cand.c2Time=item.c2Time;
+         cand.c1Open=item.c1Open;
+         cand.c1High=item.c1High;
+         cand.c1Low=item.c1Low;
+         cand.c1Close=item.c1Close;
+         cand.c2Open=item.c2Open;
+         cand.c2High=item.c2High;
+         cand.c2Low=item.c2Low;
+         cand.c2Close=item.c2Close;
+         cand.early=false;
+
+         SetupEval ev;
+
+         EvaluateCandidate(i,cand,ev);
+
+         if(ev.valid)
+         {
+            best=ev;
+            found=true;
+            foundDir=item.signal;
+            foundKey=item.c2Time;
+         }
+         else if(ev.closeReason>0)
+         {
+            closeReason=ev.closeReason;
+            closeKey=item.c2Time;
+         }
+      }
+   }
+
+   // 2) EARLY: the forming candle is C2, C1 is already complete.
+   ENUM_CRT_SIGNAL adv=g_states[i].advancedSignal;
+   datetime formingTime=g_states[i].currentBarTime;
+
+   if(!found && InpEarlySetups && formingTime>0 &&
+      (adv==CRT_BULL || adv==CRT_BEAR))
+   {
+      CRTCandidate cand;
+
+      cand.dir=adv;
+      cand.c2Time=formingTime;
+      cand.c1Open=g_states[i].advC1Open;
+      cand.c1High=g_states[i].advC1High;
+      cand.c1Low=g_states[i].advC1Low;
+      cand.c1Close=g_states[i].advC1Close;
+      cand.c2Open=g_states[i].advC2Open;
+      cand.c2High=g_states[i].advC2High;
+      cand.c2Low=g_states[i].advC2Low;
+      cand.c2Close=g_states[i].advC2Close;
+      cand.early=true;
+
+      SetupEval ev;
+
+      EvaluateCandidate(i,cand,ev);
+
+      if(ev.valid)
+      {
+         best=ev;
+         found=true;
+         foundEarly=true;
+         foundDir=adv;
+         foundKey=formingTime;
+      }
+      else if(ev.closeReason>0 && closeReason==0)
+      {
+         closeReason=ev.closeReason;
+         closeKey=formingTime;
+      }
+   }
+
+   // 3) A previously active setup has just ended.
+   if(wasActive && (!found || foundKey!=oldKey))
+   {
+      int reason=0;
+
+      if(closeReason>0 && closeKey==oldKey)
+      {
+         reason=closeReason;
+      }
+      else if(!found && oldEarly)
+      {
+         // Early setup: C2 made a new extreme (old SL taken out),
+         // or the forming candle no longer qualifies as a CRT.
+         reason=((adv==oldDir && oldKey==formingTime) ? 1 : 3);
+      }
+
+      // Tombstone the old candidate regardless of whether the reason was
+      // SL, TP, invalidation or expiry. This prevents duplicate outcomes.
+      RememberClosedSetupKey(symbol,tf,oldDir,oldKey);
+      Print("GloryAlgo SETUP FINALIZED | ",symbol," | ",
+            TimeframeName(tf)," | ",
+            (oldDir==CRT_BULL ? "BULLISH" : "BEARISH"),
+            " | C2=",TimeToString(oldKey,TIME_DATE|TIME_MINUTES),
+            " | reason=",reason);
+
+      if(reason==1 || reason==2)
+         JournalRecord(i,reason);
+
+      if(reason>0 && g_firstScanDone && InpEnableSetupAlerts)
+         SendCloseAlert(i,oldDir,reason);
+   }
+
+   // 4) Store the result.
+   if(!found)
+   {
+      g_states[i].setupActive=false;
+      g_states[i].setupScore=0;
+      g_states[i].setupEarly=false;
+      g_states[i].setupDir=CRT_NONE;
+      g_states[i].setupC2Time=0;
+      g_states[i].setupExtTime=0;
+      g_states[i].setupCisdTime=0;
+      g_states[i].setupCisdPrice=0.0;
+      g_states[i].cfHTF=false;
+      g_states[i].cfLiquidity=false;
+      g_states[i].cfLiqPool=false;
+      g_states[i].cfLiqSession=false;
+      g_states[i].cfLiqRejection=false;
+      g_states[i].kzId=0;
+      g_states[i].cfTrend=false;
+      g_states[i].cfSMT=false;
+      g_states[i].setupEntry=0.0;
+      g_states[i].setupSL=0.0;
+      g_states[i].setupFormTime=0;
+      g_states[i].setupTP=0.0;
+      g_states[i].setupRR=-1.0;
+      return;
+   }
+
+   g_states[i].setupActive=true;
+   g_states[i].setupScore=best.score;
+   g_states[i].setupEarly=foundEarly;
+   g_states[i].setupDir=foundDir;
+   g_states[i].setupC2Time=foundKey;
+   g_states[i].setupExtTime=best.extremeTime;
+   g_states[i].setupCisdTime=best.cisdTime;
+   g_states[i].setupCisdPrice=best.cisdPrice;
+   g_states[i].cfHTF=best.cfHTF;
+   g_states[i].cfLiquidity=best.cfLiquidity;
+   g_states[i].cfLiqPool=best.cfLiqPool;
+   g_states[i].cfLiqSession=best.cfLiqSession;
+   g_states[i].cfLiqRejection=best.cfLiqRejection;
+   g_states[i].kzId=best.kzId;
+   g_states[i].cfTrend=best.cfTrend;
+   g_states[i].cfSMT=best.cfSMT;
+   g_states[i].setupEntry=best.entry;
+   g_states[i].setupSL=best.sl;
+   g_states[i].setupFormTime=best.formTime;
+   g_states[i].setupTP=best.tp2;
+   g_states[i].setupRR=best.rr;
+
+   // One alert per setup. An early setup that is later confirmed
+   // (same C2 and same extreme) does not alert twice.
+   if(g_states[i].setupAlertC2!=foundKey ||
+      g_states[i].setupAlertExt!=best.extremeTime)
+   {
+      g_states[i].setupAlertC2=foundKey;
+      g_states[i].setupAlertExt=best.extremeTime;
+
+      if(g_firstScanDone && InpEnableSetupAlerts)
+         SendSetupAlert(i);
+   }
+}
+
+//------------------------- SCAN ONE STATE --------------------------//
+void ScanState(int index)
+{
+   string symbol=g_states[index].symbol;
+   ENUM_TIMEFRAMES tf=g_states[index].timeframe;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates,true);
+
+   if(CopyRates(symbol,tf,0,3,rates)<3)
+      return;
+
+   datetime currentTime=rates[0].time;
+
+   ENUM_CRT_SIGNAL advanced=
+      ClassifyCRT(rates[1],rates[0]);
+
+   g_states[index].advancedSignal=advanced;
+   g_states[index].advancedFVGQualified=false;
+
+   // Snapshot of the still-forming C2 against the completed C1.
+   g_states[index].advC1Time=rates[1].time;
+   g_states[index].advC1High=rates[1].high;
+   g_states[index].advC1Low=rates[1].low;
+   g_states[index].advC2Open=rates[0].open;
+   g_states[index].advC2High=rates[0].high;
+   g_states[index].advC2Low=rates[0].low;
+   g_states[index].advC1Open=rates[1].open;
+   g_states[index].advC1Close=rates[1].close;
+   g_states[index].advC2Close=rates[0].close;
+
+   if(advanced!=CRT_NONE)
+   {
+      g_states[index].advancedFVGQualified=
+         IsCRTQualifiedByFVG(index,advanced,rates[0]);
+   }
+
+   if(g_states[index].currentBarTime==0)
+   {
+      g_states[index].currentBarTime=currentTime;
+
+      ENUM_CRT_SIGNAL initial=
+         ClassifyCRT(rates[2],rates[1]);
+
+      g_states[index].confirmedSignal=initial;
+      g_states[index].confirmedC3Time=currentTime;
+
+      g_states[index].confirmedC1Time=rates[2].time;
+      g_states[index].confirmedC2Time=rates[1].time;
+
+      g_states[index].confirmedC3EndTime=
+         currentTime+PeriodSeconds(tf);
+
+      g_states[index].confirmedC1High=rates[2].high;
+      g_states[index].confirmedC1Low=rates[2].low;
+
+      g_states[index].confirmedC2High=rates[1].high;
+      g_states[index].confirmedC2Low=rates[1].low;
+
+      g_states[index].confirmedFVGQualified=false;
+      g_states[index].confirmedFVGPresent=false;
+
+      if(initial!=CRT_NONE)
+      {
+         g_states[index].confirmedFVGPresent=
+            CheckCRTFVG(index,initial,rates[1]);
+
+         g_states[index].confirmedFVGQualified=
+            (!InpEnableFVGFilter ||
+             g_states[index].confirmedFVGPresent);
+
+         AddCRTToHistory(
+            index,
+            initial,
+            rates[2],
+            rates[1],
+            currentTime,
+            g_states[index].confirmedC3EndTime
+         );
+      }
+
+      UpdateCISD(index);
+      UpdateSetup(index);
+      return;
+   }
+
+   if(currentTime!=g_states[index].currentBarTime)
+   {
+      g_states[index].currentBarTime=currentTime;
+
+      ENUM_CRT_SIGNAL confirmed=
+         ClassifyCRT(rates[2],rates[1]);
+
+      g_states[index].confirmedSignal=confirmed;
+      g_states[index].confirmedC3Time=currentTime;
+
+      g_states[index].confirmedC1Time=rates[2].time;
+      g_states[index].confirmedC2Time=rates[1].time;
+
+      g_states[index].confirmedC3EndTime=
+         currentTime+PeriodSeconds(tf);
+
+      g_states[index].confirmedC1High=rates[2].high;
+      g_states[index].confirmedC1Low=rates[2].low;
+
+      g_states[index].confirmedC2High=rates[1].high;
+      g_states[index].confirmedC2Low=rates[1].low;
+
+      g_states[index].confirmedFVGQualified=false;
+      g_states[index].confirmedFVGPresent=false;
+
+      ResetCISDState(index);
+
+      if(confirmed!=CRT_NONE)
+      {
+         g_states[index].confirmedFVGPresent=
+            CheckCRTFVG(index,confirmed,rates[1]);
+
+         g_states[index].confirmedFVGQualified=
+            (!InpEnableFVGFilter ||
+             g_states[index].confirmedFVGPresent);
+
+         AddCRTToHistory(
+            index,
+            confirmed,
+            rates[2],
+            rates[1],
+            currentTime,
+            g_states[index].confirmedC3EndTime
+         );
+
+      }
+   }
+
+   UpdateCISD(index);
+   UpdateSetup(index);
+}
+
+//------------------------- CHART OBJECT HELPERS --------------------//
+void DeleteChartObjects()
+{
+   ObjectsDeleteAll(0,CHART_PREFIX);
+}
+
+void SetChartObjectCommon(string name,color clr)
+{
+   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+}
+
+//------------------------- CHART TIMEFRAME PAIRING -----------------//
+// Which CRT timeframe belongs to which (lower) chart timeframe.
+// This mirrors the CISD mapping:  M1<-M15, M3<-M30, M5<-H1,
+// M15<-H4, M30<-D1.
+ENUM_TIMEFRAMES GetPairedCRTTimeframe(ENUM_TIMEFRAMES chartTF)
+{
+   switch(chartTF)
+   {
+      case PERIOD_M1:  return PERIOD_M15;
+      case PERIOD_M3:  return PERIOD_M30;
+      case PERIOD_M5:  return PERIOD_H1;
+      case PERIOD_M15: return PERIOD_H4;
+      case PERIOD_M30: return PERIOD_D1;
+   }
+
+   return PERIOD_CURRENT;
+}
+
+// Chart with a paired CRT timeframe  -> only that CRT is shown.
+// Any other chart timeframe          -> only a CRT of the SAME timeframe
+//                                       is shown, so CRTs are never drawn
+//                                       on a higher chart timeframe.
+bool IsCRTVisibleOnChart(ENUM_TIMEFRAMES crtTF)
+{
+   if(!InpFilterByChartTimeframe)
+      return true;
+
+   ENUM_TIMEFRAMES chartTF=(ENUM_TIMEFRAMES)Period();
+   ENUM_TIMEFRAMES paired=GetPairedCRTTimeframe(chartTF);
+
+   if(paired!=PERIOD_CURRENT)
+      return (crtTF==paired);
+
+   return (crtTF==chartTF);
+}
+
+//------------------------- DRAW ONE FVG RECTANGLE ------------------//
+void DrawFVGRectangle(ENUM_TIMEFRAMES crtTF,
+                      datetime c2Time,
+                      ENUM_TIMEFRAMES htf,
+                      datetime startTime,
+                      datetime endTime,
+                      double zoneLow,
+                      double zoneHigh,
+                      bool bullish)
+{
+   // Stable unique name: CRT timeframe + C2 time + FVG timeframe
+   // + FVG formation time.
+   string name=CHART_PREFIX+"FVG_"+
+               TimeframeName(crtTF)+"_"+
+               IntegerToString((long)c2Time)+"_"+
+               TimeframeName(htf)+"_"+
+               IntegerToString((long)startTime);
+
+   color zoneColor=
+      (bullish ? InpBullFVGColor : InpBearFVGColor);
+
+   if(ObjectFind(0,name)<0)
+   {
+      ResetLastError();
+      if(!ObjectCreate(0,name,OBJ_RECTANGLE,0,
+                       startTime,zoneHigh,endTime,zoneLow))
+      {
+         Print("GloryAlgo: FVG rectangle creation failed: ",
+               name," Error: ",GetLastError());
+         return;
+      }
+   }
+   else
+   {
+      ObjectMove(0,name,0,startTime,zoneHigh);
+      ObjectMove(0,name,1,endTime,zoneLow);
+   }
+
+   SetChartObjectCommon(name,zoneColor);
+
+   ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_SOLID);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,name,OBJPROP_FILL,true);
+
+   // Draw in front of the chart candles so the zones are visible.
+   ObjectSetInteger(0,name,OBJPROP_BACK,false);
+   ObjectSetInteger(0,name,OBJPROP_RAY_RIGHT,false);
+   ObjectSetInteger(0,name,OBJPROP_ZORDER,1);
+
+   string labelName=name+"_LABEL";
+
+   if(ObjectFind(0,labelName)<0)
+   {
+      ResetLastError();
+      if(!ObjectCreate(0,labelName,OBJ_TEXT,0,startTime,zoneHigh))
+         Print("GloryAlgo: FVG label creation failed: ",labelName,
+               " Error: ",GetLastError());
+   }
+   else
+   {
+      ObjectMove(0,labelName,0,startTime,zoneHigh);
+   }
+
+   if(ObjectFind(0,labelName)>=0)
+   {
+      SetChartObjectCommon(labelName,zoneColor);
+
+      ObjectSetInteger(0,labelName,OBJPROP_FONTSIZE,8);
+      ObjectSetString(0,labelName,OBJPROP_FONT,"Tahoma");
+      ObjectSetString(0,labelName,OBJPROP_TEXT,
+                      TimeframeName(htf)+" FVG");
+      ObjectSetInteger(0,labelName,OBJPROP_ANCHOR,
+                       ANCHOR_LEFT_LOWER);
+   }
+}
+
+//------------------------- CRT FVG DIRECTION PERMISSION ------------//
+bool IsHistoryFVGPermitted(ENUM_CRT_SIGNAL signal,
+                           bool bullishFVG)
+{
+   if(signal==CRT_BULL)
+   {
+      return IsFVGDirectionPermitted(
+         InpBullCRT_FVGPermission,
+         bullishFVG
+      );
+   }
+
+   if(signal==CRT_BEAR)
+   {
+      return IsFVGDirectionPermitted(
+         InpBearCRT_FVGPermission,
+         bullishFVG
+      );
+   }
+
+   if(signal==CRT_DOUBLE)
+   {
+      bool bullPermission=
+         IsFVGDirectionPermitted(
+            InpBullCRT_FVGPermission,
+            bullishFVG
+         );
+
+      bool bearPermission=
+         IsFVGDirectionPermitted(
+            InpBearCRT_FVGPermission,
+            bullishFVG
+         );
+
+      return (bullPermission || bearPermission);
+   }
+
+   return false;
+}
+
+//------------------------- DRAW LINKED FVG HISTORY -----------------//
+void DrawLinkedFVGsForHistory(int historyIndex)
+{
+   if(historyIndex<0 ||
+      historyIndex>=g_crtHistoryCount)
+      return;
+
+   CRTHistory item=g_crtHistory[historyIndex];
+
+   if(!IsCRTVisibleOnChart(item.timeframe))
+      return;
+
+   ENUM_TIMEFRAMES htf=
+      FindNearestHigherTF(item.timeframe);
+
+   if(htf==PERIOD_CURRENT)
+      return;
+
+   int lookback=InpFVGLookback;
+
+   if(lookback<5)
+      lookback=5;
+
+   int extension=InpFVGExtendBars;
+
+   if(extension<1)
+      extension=1;
+
+   int maxObjects=InpFVGObjectsPerTF;
+
+   if(maxObjects<1)
+      maxObjects=1;
+
+   int htfSeconds=PeriodSeconds(htf);
+
+   if(htfSeconds<=0)
+      return;
+
+   // IMPORTANT:
+   // Copy the HTF history around this CRT's C2 time.
+   // Do not copy only the latest HTF bars, because older
+   // retained CRT events may be outside that recent window.
+   datetime rangeStart=
+      item.c2Time-(datetime)(htfSeconds*(lookback+5));
+
+   datetime rangeEnd=item.c2Time;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates,true);
+
+   int copied=CopyRates(
+      item.symbol,
+      htf,
+      rangeStart,
+      rangeEnd,
+      rates
+   );
+
+   if(copied<5)
+      return;
+
+   int maxIndex=(int)MathMin(lookback,copied-3);
+   int drawn=0;
+
+   for(int i=1;i<=maxIndex && drawn<maxObjects;i++)
+   {
+      int older=i+2;
+
+      // The third candle must be completely closed by C2 open.
+      datetime formedTime=rates[i].time+htfSeconds;
+
+      if(formedTime>item.c2Time)
+         continue;
+
+      bool bullish=
+         rates[older].high<rates[i].low;
+
+      bool bearish=
+         rates[older].low>rates[i].high;
+
+      if(!bullish && !bearish)
+         continue;
+
+      if(!IsHistoryFVGPermitted(item.signal,bullish))
+         continue;
+
+      double zoneLow=0.0;
+      double zoneHigh=0.0;
+
+      if(bullish)
+      {
+         zoneLow=rates[older].high;
+         zoneHigh=rates[i].low;
+      }
+      else
+      {
+         zoneLow=rates[i].high;
+         zoneHigh=rates[older].low;
+      }
+
+      if(!IsFVGStillValid(
+            rates,
+            i,
+            bullish,
+            zoneLow,
+            zoneHigh,
+            item.c2Time,
+            htf))
+         continue;
+
+      bool touches=
+         item.c2High>=zoneLow &&
+         item.c2Low<=zoneHigh;
+
+      if(!touches)
+         continue;
+
+      datetime endTime=
+         TimeCurrent()+
+         (datetime)(PeriodSeconds(htf)*extension);
+
+      DrawFVGRectangle(
+         item.timeframe,
+         item.c2Time,
+         htf,
+         formedTime,
+         endTime,
+         zoneLow,
+         zoneHigh,
+         bullish
+      );
+
+      drawn++;
+   }
+}
+
+//------------------------- DRAW ONLY CRT-LINKED FVGs ---------------//
+void DrawChartFVGs()
+{
+   if(!InpDrawFVGZones)
+      return;
+
+   string chartSymbol=Symbol();
+
+   for(int i=g_crtHistoryCount-1;i>=0;i--)
+   {
+      if(g_crtHistory[i].symbol!=chartSymbol)
+         continue;
+
+      DrawLinkedFVGsForHistory(i);
+   }
+}
+
+//------------------------- DRAW CRT SWEEP LINE ---------------------//
+void DrawCRTLevel(string name,
+                  datetime startTime,
+                  datetime endTime,
+                  double price,
+                  color lineColor,
+                  string labelText)
+{
+   if(endTime<=startTime)
+      endTime=startTime+60;
+
+   if(ObjectCreate(0,name,OBJ_TREND,0,
+                   startTime,price,endTime,price))
+   {
+      SetChartObjectCommon(name,lineColor);
+
+      ObjectSetInteger(0,name,OBJPROP_RAY_LEFT,false);
+      ObjectSetInteger(0,name,OBJPROP_RAY_RIGHT,false);
+      ObjectSetInteger(0,name,OBJPROP_STYLE,InpCRTLineStyle);
+      ObjectSetInteger(0,name,OBJPROP_WIDTH,InpCRTLineWidth);
+      ObjectSetInteger(0,name,OBJPROP_BACK,false);
+   }
+
+   string labelName=name+"_LABEL";
+
+   if(ObjectCreate(0,labelName,OBJ_TEXT,0,endTime,price))
+   {
+      SetChartObjectCommon(labelName,lineColor);
+
+      ObjectSetInteger(0,labelName,OBJPROP_FONTSIZE,
+                       InpCRTLabelFontSize);
+      ObjectSetInteger(0,labelName,OBJPROP_ANCHOR,ANCHOR_LEFT);
+
+      ObjectSetString(0,labelName,OBJPROP_FONT,"Tahoma Bold");
+      ObjectSetString(0,labelName,OBJPROP_TEXT,labelText);
+   }
+}
+
+//------------------------- FIND LTF EXTREME BAR --------------------//
+datetime FindC1ExtremeTime(string symbol,
+                           ENUM_TIMEFRAMES crtTF,
+                           datetime c1Time,
+                           double price,
+                           bool isHigh)
+{
+   ENUM_TIMEFRAMES ltf=(ENUM_TIMEFRAMES)Period();
+
+   if(PeriodSeconds(ltf)>=PeriodSeconds(crtTF))
+      return c1Time;
+
+   datetime c1End=c1Time+PeriodSeconds(crtTF)-1;
+
+   MqlRates r[];
+   ArraySetAsSeries(r,false);
+
+   int copied=CopyRates(symbol,ltf,c1Time,c1End,r);
+
+   if(copied<=0)
+      return c1Time;
+
+   int best=-1;
+   double bestDiff=DBL_MAX;
+
+   for(int i=0;i<copied;i++)
+   {
+      double diff=MathAbs((isHigh ? r[i].high : r[i].low)-price);
+
+      if(diff<bestDiff)
+      {
+         bestDiff=diff;
+         best=i;
+      }
+   }
+
+   if(best<0)
+      return c1Time;
+
+   return r[best].time;
+}
+
+//------------------------- DRAW CONFIRMED CRT LEVELS ---------------//
+void DrawChartCRTLevels()
+{
+   if(!InpDrawCRTLevels)
+      return;
+
+   string chartSymbol=Symbol();
+
+   for(int i=0;i<g_stateCount;i++)
+   {
+      if(g_states[i].symbol!=chartSymbol)
+         continue;
+
+      ENUM_CRT_SIGNAL signal=g_states[i].confirmedSignal;
+
+      if(signal==CRT_NONE)
+         continue;
+
+      if(!IsCRTVisibleOnChart(g_states[i].timeframe))
+         continue;
+
+      if(InpEnableFVGFilter &&
+         !g_states[i].confirmedFVGQualified)
+         continue;
+
+      datetime c1Time=g_states[i].confirmedC1Time;
+      datetime endTime=g_states[i].confirmedC3EndTime;
+
+      if(c1Time<=0 || endTime<=c1Time)
+         continue;
+
+      ENUM_TIMEFRAMES crtTF=g_states[i].timeframe;
+      string tfName=TimeframeName(crtTF);
+
+      string base=CHART_PREFIX+"CRT_"+
+                  tfName+"_"+
+                  IntegerToString(i);
+
+      double c1High=g_states[i].confirmedC1High;
+      double c1Low=g_states[i].confirmedC1Low;
+
+      if(signal==CRT_BULL)
+      {
+         datetime startLow=FindC1ExtremeTime(
+            chartSymbol,crtTF,c1Time,c1Low,false
+         );
+
+         DrawCRTLevel(base+"_LOW",
+                      startLow,endTime,c1Low,
+                      InpBullCRTLineColor,
+                      tfName+" CRT");
+      }
+      else if(signal==CRT_BEAR)
+      {
+         datetime startHigh=FindC1ExtremeTime(
+            chartSymbol,crtTF,c1Time,c1High,true
+         );
+
+         DrawCRTLevel(base+"_HIGH",
+                      startHigh,endTime,c1High,
+                      InpBearCRTLineColor,
+                      tfName+" CRT");
+      }
+      else if(signal==CRT_DOUBLE)
+      {
+         datetime startHigh=FindC1ExtremeTime(
+            chartSymbol,crtTF,c1Time,c1High,true
+         );
+
+         datetime startLow=FindC1ExtremeTime(
+            chartSymbol,crtTF,c1Time,c1Low,false
+         );
+
+         DrawCRTLevel(base+"_HIGH",
+                      startHigh,endTime,c1High,
+                      InpDoubleCRTLineColor,
+                      tfName+" CRT");
+
+         DrawCRTLevel(base+"_LOW",
+                      startLow,endTime,c1Low,
+                      InpDoubleCRTLineColor,
+                      tfName+" CRT");
+      }
+   }
+}
+
+//------------------------- DRAW CISD LEVEL --------------------------//
+void DrawCISDLevel(int stateIndex)
+{
+   if(!InpEnableCISD || !InpDrawCISDLevels)
+      return;
+
+   if(!g_states[stateIndex].cisdReferenceFound)
+      return;
+
+   string chartSymbol=Symbol();
+
+   if(g_states[stateIndex].symbol!=chartSymbol)
+      return;
+
+   if(!IsCRTVisibleOnChart(g_states[stateIndex].timeframe))
+      return;
+
+   ENUM_CRT_SIGNAL signal=
+      g_states[stateIndex].confirmedSignal;
+
+   if(signal!=CRT_BULL && signal!=CRT_BEAR)
+      return;
+
+   string tfName=TimeframeName(g_states[stateIndex].timeframe);
+
+   string name=CHART_PREFIX+"CISD_"+
+               tfName+"_"+
+               IntegerToString(stateIndex);
+
+   datetime startTime=
+      g_states[stateIndex].cisdReferenceTime;
+
+   datetime endTime=TimeCurrent();
+
+   if(endTime<=startTime)
+      endTime=startTime+60;
+
+   double price=
+      g_states[stateIndex].cisdReferencePrice;
+
+   color lineColor=
+      (signal==CRT_BULL ? InpBullColor : InpBearColor);
+
+   if(ObjectCreate(0,name,OBJ_TREND,0,
+                   startTime,price,endTime,price))
+   {
+      SetChartObjectCommon(name,lineColor);
+
+      ObjectSetInteger(0,name,OBJPROP_RAY_LEFT,false);
+      ObjectSetInteger(0,name,OBJPROP_RAY_RIGHT,false);
+      ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_DASH);
+      ObjectSetInteger(0,name,OBJPROP_WIDTH,2);
+      ObjectSetInteger(0,name,OBJPROP_BACK,false);
+   }
+
+   string labelName=name+"_LABEL";
+
+   if(ObjectCreate(0,labelName,OBJ_TEXT,0,endTime,price))
+   {
+      SetChartObjectCommon(labelName,lineColor);
+
+      ObjectSetInteger(0,labelName,OBJPROP_FONTSIZE,8);
+      ObjectSetInteger(0,labelName,OBJPROP_ANCHOR,ANCHOR_LEFT);
+      ObjectSetString(0,labelName,OBJPROP_FONT,"Tahoma Bold");
+
+      string labelText=
+         (g_states[stateIndex].cisdConfirmed ?
+          tfName+" CISD" :
+          tfName+" CISD WAIT");
+
+      ObjectSetString(0,labelName,OBJPROP_TEXT,labelText);
+   }
+}
+
+//------------------------- DRAW SETUP LEVELS -----------------------//
+void DrawLevelLine(string name,
+                   datetime startTime,
+                   datetime endTime,
+                   double price,
+                   color lineColor,
+                   ENUM_LINE_STYLE style,
+                   string text)
+{
+   if(endTime<=startTime)
+      endTime=startTime+60;
+
+   if(ObjectCreate(0,name,OBJ_TREND,0,
+                   startTime,price,endTime,price))
+   {
+      SetChartObjectCommon(name,lineColor);
+
+      ObjectSetInteger(0,name,OBJPROP_RAY_LEFT,false);
+      ObjectSetInteger(0,name,OBJPROP_RAY_RIGHT,false);
+      ObjectSetInteger(0,name,OBJPROP_STYLE,style);
+      ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+      ObjectSetInteger(0,name,OBJPROP_BACK,false);
+   }
+
+   string labelName=name+"_LABEL";
+
+   if(ObjectCreate(0,labelName,OBJ_TEXT,0,endTime,price))
+   {
+      SetChartObjectCommon(labelName,lineColor);
+
+      ObjectSetInteger(0,labelName,OBJPROP_FONTSIZE,7);
+      ObjectSetInteger(0,labelName,OBJPROP_ANCHOR,ANCHOR_LEFT);
+      ObjectSetString(0,labelName,OBJPROP_FONT,"Tahoma Bold");
+      ObjectSetString(0,labelName,OBJPROP_TEXT,text);
+   }
+}
+
+void DrawSetupLevel(int i)
+{
+   if(!InpDrawSetupLevels || !g_states[i].setupActive)
+      return;
+
+   if(g_states[i].symbol!=Symbol())
+      return;
+
+   if(!IsCRTVisibleOnChart(g_states[i].timeframe))
+      return;
+
+   ENUM_TIMEFRAMES crtTF=g_states[i].timeframe;
+   string tfName=TimeframeName(crtTF);
+
+   string base=CHART_PREFIX+"SETUP_"+
+               tfName+"_"+
+               IntegerToString(i);
+
+   bool bull=(g_states[i].setupDir==CRT_BULL);
+
+   color dirColor=(bull ? InpBullColor : InpBearColor);
+
+   datetime startTime=g_states[i].setupC2Time;
+
+   datetime endTime=
+      TimeCurrent()+
+      (datetime)(PeriodSeconds((ENUM_TIMEFRAMES)Period())*8);
+
+   DrawLevelLine(base+"_TP",startTime,endTime,
+                 g_states[i].setupTP,dirColor,STYLE_DOT,
+                 tfName+" TP2");
+
+   DrawLevelLine(base+"_ENTRY",startTime,endTime,
+                 g_states[i].setupEntry,InpInkColor,STYLE_DASHDOT,
+                 tfName+" ENTRY");
+
+   DrawLevelLine(base+"_SL",startTime,endTime,
+                 g_states[i].setupSL,InpMutedTextColor,STYLE_DOT,
+                 tfName+" SL");
+
+   // Early setups have no confirmed CRT yet, so draw their own
+   // C1 boundary and CISD level.
+   if(g_states[i].setupEarly)
+   {
+      double c1Price=(bull ? g_states[i].advC1Low :
+                             g_states[i].advC1High);
+
+      datetime c1Start=FindC1ExtremeTime(
+         g_states[i].symbol,crtTF,
+         g_states[i].advC1Time,c1Price,!bull
+      );
+
+      DrawCRTLevel(base+"_C1",
+                   c1Start,
+                   startTime+(datetime)(PeriodSeconds(crtTF)*2),
+                   c1Price,
+                   (bull ? InpBullCRTLineColor : InpBearCRTLineColor),
+                   tfName+" CRT*");
+
+      if(InpEnableCISD && InpDrawCISDLevels &&
+         g_states[i].setupCisdPrice>0.0)
+      {
+         DrawLevelLine(base+"_CISD",
+                       g_states[i].setupCisdTime,endTime,
+                       g_states[i].setupCisdPrice,dirColor,STYLE_DASH,
+                       tfName+" CISD");
+      }
+   }
+}
+
+//------------------------- DRAW ALL CHART OBJECTS ------------------//
+void DrawChartObjects()
+{
+   DeleteChartObjects();
+
+   if(InpDrawFVGZones)
+      DrawChartFVGs();
+
+   if(InpDrawCRTLevels)
+      DrawChartCRTLevels();
+
+   if(InpEnableCISD && InpDrawCISDLevels)
+   {
+      for(int i=0;i<g_stateCount;i++)
+         DrawCISDLevel(i);
+   }
+
+   if(InpDrawSetupLevels)
+   {
+      for(int i=0;i<g_stateCount;i++)
+         DrawSetupLevel(i);
+   }
+
+   ChartRedraw(0);
+}
+
+//------------------------- DASHBOARD OBJECT CLEANUP ----------------//
+void DeleteDashboardObjects()
+{
+   ObjectsDeleteAll(0,PREFIX);
+}
+
+void DeleteAllObjects()
+{
+   ObjectsDeleteAll(0,PREFIX);
+   ObjectsDeleteAll(0,CHART_PREFIX);
+}
+
+//------------------------- COLOUR HELPER ---------------------------//
+color Darken(color clr,double factor)
+{
+   uint c=(uint)clr;
+
+   int r=(int)(c & 0xFF);
+   int g=(int)((c>>8) & 0xFF);
+   int b=(int)((c>>16) & 0xFF);
+
+   r=(int)(r*factor);
+   g=(int)(g*factor);
+   b=(int)(b*factor);
+
+   return (color)(r | (g<<8) | (b<<16));
+}
+
+//------------------------- RECTANGLE -------------------------------//
+void CreateRect(string name,int x,int y,int width,int height,
+                color background,color border)
+{
+   if(ObjectFind(0,name)<0)
+   {
+      ResetLastError();
+
+      if(!ObjectCreate(0,name,OBJ_RECTANGLE_LABEL,0,0,0))
+      {
+         Print("GloryAlgo: Rectangle creation failed: ",
+               name," Error: ",GetLastError());
+         return;
+      }
+   }
+
+   ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,name,OBJPROP_XSIZE,width);
+   ObjectSetInteger(0,name,OBJPROP_YSIZE,height);
+   ObjectSetInteger(0,name,OBJPROP_BGCOLOR,background);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,border);
+   ObjectSetInteger(0,name,OBJPROP_BORDER_TYPE,BORDER_FLAT);
+   ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,name,OBJPROP_BACK,false);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+}
+
+//------------------------- TEXT ------------------------------------//
+void CreateText(string name,string text,int x,int y,int fontSize,
+                color textColor,string font="Tahoma",
+                ENUM_ANCHOR_POINT anchor=ANCHOR_LEFT_UPPER)
+{
+   if(ObjectFind(0,name)<0)
+   {
+      ResetLastError();
+
+      if(!ObjectCreate(0,name,OBJ_LABEL,0,0,0))
+      {
+         Print("GloryAlgo: Label creation failed: ",
+               name," Error: ",GetLastError());
+         return;
+      }
+   }
+
+   ObjectSetInteger(0,name,OBJPROP_CORNER,CORNER_LEFT_UPPER);
+   ObjectSetInteger(0,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(0,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,fontSize);
+   ObjectSetInteger(0,name,OBJPROP_COLOR,textColor);
+   ObjectSetInteger(0,name,OBJPROP_ANCHOR,anchor);
+   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,name,OBJPROP_HIDDEN,true);
+
+   ObjectSetString(0,name,OBJPROP_FONT,font);
+   ObjectSetString(0,name,OBJPROP_TEXT,text);
+}
+
+//------------------------- POSITION --------------------------------//
+void LoadPosition()
+{
+   g_dashX=InpDashboardX;
+   g_dashY=InpDashboardY;
+
+   if(GlobalVariableCheck("GA_CRT_POS_X"))
+      g_dashX=(int)GlobalVariableGet("GA_CRT_POS_X");
+
+   if(GlobalVariableCheck("GA_CRT_POS_Y"))
+      g_dashY=(int)GlobalVariableGet("GA_CRT_POS_Y");
+}
+
+void SavePosition()
+{
+   GlobalVariableSet("GA_CRT_POS_X",g_dashX);
+   GlobalVariableSet("GA_CRT_POS_Y",g_dashY);
+}
+
+void ClampDashboard()
+{
+   int chartW=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS);
+   int chartH=(int)ChartGetInteger(0,CHART_HEIGHT_IN_PIXELS);
+
+   if(chartW<=0 || chartH<=0)
+      return;
+
+   int maxX=MathMax(0,chartW-g_boxW);
+   int maxY=MathMax(0,chartH-g_boxH);
+
+   g_dashX=MathMax(0,MathMin(g_dashX,maxX));
+   g_dashY=MathMax(0,MathMin(g_dashY,maxY));
+}
+
+//------------------------- SETUPS OF ONE SYMBOL --------------------//
+// Fills out[] with the state indexes of the symbol's active setups,
+// best score first, then higher timeframe first.
+int CollectRowSetups(int symbolIndex,int &out[])
+{
+   ArrayResize(out,0);
+
+   int n=0;
+
+   for(int t=0;t<g_timeframeCount;t++)
+   {
+      int idx=symbolIndex*g_timeframeCount+t;
+
+      if(idx>=g_stateCount)
+         break;
+
+      if(!g_states[idx].setupActive)
+         continue;
+
+      ArrayResize(out,n+1);
+      out[n]=idx;
+      n++;
+   }
+
+   for(int a=0;a<n-1;a++)
+   {
+      for(int b=a+1;b<n;b++)
+      {
+         bool swap=false;
+
+         if(g_states[out[b]].setupScore>g_states[out[a]].setupScore)
+            swap=true;
+         else if(g_states[out[b]].setupScore==g_states[out[a]].setupScore &&
+                 PeriodSeconds(g_states[out[b]].timeframe)>
+                 PeriodSeconds(g_states[out[a]].timeframe))
+            swap=true;
+
+         if(swap)
+         {
+            int temp=out[a];
+            out[a]=out[b];
+            out[b]=temp;
+         }
+      }
+   }
+
+   return n;
+}
+
+//------------------------- DASHBOARD HELPERS -----------------------//
+color Lighten(color clr,double factor)
+{
+   uint c=(uint)clr;
+
+   int r=(int)(c & 0xFF);
+   int g=(int)((c>>8) & 0xFF);
+   int b=(int)((c>>16) & 0xFF);
+
+   r=(int)(r+((255-r)*factor));
+   g=(int)(g+((255-g)*factor));
+   b=(int)(b+((255-b)*factor));
+
+   return (color)(r | (g<<8) | (b<<16));
+}
+
+// Grade from score share: A+ >= 75%, A >= 55%, otherwise B.
+int GradeRank(int si)
+{
+   int maxScore=MaxSetupScore();
+
+   if(maxScore<=0)
+      return 0;
+
+   double ratio=(double)g_states[si].setupScore/maxScore;
+
+   if(ratio>=0.75)
+      return 2;
+
+   if(ratio>=0.55)
+      return 1;
+
+   return 0;
+}
+
+string GradeText(int rank)
+{
+   if(rank>=2)
+      return "A+";
+
+   if(rank==1)
+      return "A";
+
+   return "B";
+}
+
+bool PassFilter(int si)
+{
+   switch(g_filter)
+   {
+      case 1: return (g_states[si].setupDir==CRT_BULL);
+      case 2: return (g_states[si].setupDir==CRT_BEAR);
+      case 3: return g_states[si].setupEarly;
+      case 4: return (GradeRank(si)>=1);
+   }
+
+   return true;
+}
+
+string FormatAge(long seconds)
+{
+   if(seconds<60)
+      return "<1m";
+
+   long minutes=seconds/60;
+
+   if(minutes<60)
+      return IntegerToString((int)minutes)+"m";
+
+   long hours=minutes/60;
+   long restMinutes=minutes%60;
+
+   if(hours<24)
+      return IntegerToString((int)hours)+"h "+
+             IntegerToString((int)restMinutes)+"m";
+
+   long days=hours/24;
+   long restHours=hours%24;
+
+   return IntegerToString((int)days)+"d "+
+          IntegerToString((int)restHours)+"h";
+}
+
+string ShortSymbol(string name)
+{
+   if(StringLen(name)>20)
+      return StringSubstr(name,0,18)+"..";
+
+   return name;
+}
+
+// Live result of a setup in R (entry = 0R, stop loss = -1R).
+bool LiveR(int si,double &rValue)
+{
+   bool bull=(g_states[si].setupDir==CRT_BULL);
+
+   double price=SymbolInfoDouble(g_states[si].symbol,
+                                 bull ? SYMBOL_BID : SYMBOL_ASK);
+
+   double risk=MathAbs(g_states[si].setupEntry-g_states[si].setupSL);
+
+   if(price<=0.0 || risk<=0.0)
+   {
+      rValue=0.0;
+      return false;
+   }
+
+   if(bull)
+      rValue=(price-g_states[si].setupEntry)/risk;
+   else
+      rValue=(g_states[si].setupEntry-price)/risk;
+
+   return true;
+}
+
+// Position of a price on the SL -> TP2 bar (0.0 .. 1.0).
+double BarPos(int si,double price)
+{
+   bool bull=(g_states[si].setupDir==CRT_BULL);
+
+   double sl=g_states[si].setupSL;
+   double tp=g_states[si].setupTP;
+
+   double span=(bull ? tp-sl : sl-tp);
+
+   if(span<=0.0)
+      return 0.0;
+
+   double f=(bull ? (price-sl)/span : (sl-price)/span);
+
+   return MathMax(0.0,MathMin(1.0,f));
+}
+
+//------------------------- DASHBOARD --------------------------------//
+// Command Center: filter chips, one row per setup (grouped by symbol),
+// grade, side, score pips, RR, live progress bar, age and a footer with
+// the win rate and the last results.
+void DrawDashboard()
+{
+   const int PAD=12;
+   const int PANEL_W=772;
+   const int ROW_H=38;
+   const int LOGO_W=124;
+   const int LOGO_H=26;
+   const int CHIPS_Y=38;
+   const int HEADER_Y=70;
+   const int ROWS_Y=88;
+   const int FOOT_H=24;
+
+   int tfCount=g_timeframeCount;
+
+   // 1) Totals for the filter chips.
+   int cAll=0;
+   int cBull=0;
+   int cBear=0;
+   int cEarly=0;
+   int cGood=0;
+
+   for(int i=0;i<g_stateCount;i++)
+   {
+      if(!g_states[i].setupActive)
+         continue;
+
+      cAll++;
+
+      if(g_states[i].setupDir==CRT_BULL)
+         cBull++;
+      else
+         cBear++;
+
+      if(g_states[i].setupEarly)
+         cEarly++;
+
+      if(GradeRank(i)>=1)
+         cGood++;
+   }
+
+   int activeTotal=cAll;
+
+   // 2) Symbols with setups, best score first.
+   int rowSym[];
+   int rowBest[];
+   int symRows=0;
+
+   for(int s=0;s<g_symbolCount;s++)
+   {
+      int best=-1;
+
+      for(int t=0;t<tfCount;t++)
+      {
+         int idx=s*tfCount+t;
+
+         if(idx>=g_stateCount)
+            break;
+
+         if(g_states[idx].setupActive &&
+            g_states[idx].setupScore>best)
+            best=g_states[idx].setupScore;
+      }
+
+      if(best<0)
+         continue;
+
+      ArrayResize(rowSym,symRows+1);
+      ArrayResize(rowBest,symRows+1);
+      rowSym[symRows]=s;
+      rowBest[symRows]=best;
+      symRows++;
+   }
+
+   for(int a=0;a<symRows-1;a++)
+   {
+      for(int b=a+1;b<symRows;b++)
+      {
+         if(rowBest[b]>rowBest[a])
+         {
+            int tempSym=rowSym[a];
+            int tempBest=rowBest[a];
+
+            rowSym[a]=rowSym[b];
+            rowBest[a]=rowBest[b];
+
+            rowSym[b]=tempSym;
+            rowBest[b]=tempBest;
+         }
+      }
+   }
+
+   // 3) One display row per setup (filtered), grouped by symbol.
+   int dState[];
+   bool dFirst[];
+   string dTag[];
+   int dRows=0;
+
+   int maxRows=MathMax(1,InpDashboardMaxRows);
+
+   for(int q=0;q<symRows && dRows<maxRows;q++)
+   {
+      int list[];
+      int n=CollectRowSetups(rowSym[q],list);
+
+      bool anyBull=false;
+      bool anyBear=false;
+
+      for(int k=0;k<n;k++)
+      {
+         if(g_states[list[k]].setupDir==CRT_BULL)
+            anyBull=true;
+         else
+            anyBear=true;
+      }
+
+      string tag="";
+
+      if(n>1)
+         tag=((anyBull && anyBear) ? "CONFLICT" : "ALIGNED");
+
+      bool first=true;
+
+      for(int k=0;k<n && dRows<maxRows;k++)
+      {
+         if(!PassFilter(list[k]))
+            continue;
+
+         ArrayResize(dState,dRows+1);
+         ArrayResize(dFirst,dRows+1);
+         ArrayResize(dTag,dRows+1);
+
+         dState[dRows]=list[k];
+         dFirst[dRows]=first;
+         dTag[dRows]=(first ? tag : "");
+
+         first=false;
+         dRows++;
+      }
+   }
+
+   // 4) Layout signature (rebuild objects only when this changes).
+   string sig=(g_dashboardOpen ? "O" : "M")+
+              IntegerToString(activeTotal);
+
+   if(g_dashboardOpen)
+   {
+      sig+="|F"+IntegerToString(g_filter)+
+           "|"+IntegerToString(cBull)+","+IntegerToString(cBear)+","+
+           IntegerToString(cEarly)+","+IntegerToString(cGood)+
+           "|L"+IntegerToString(g_jnLastCount);
+
+      for(int q=0;q<g_jnLastCount;q++)
+         sig+=IntegerToString(g_jnLast[q]);
+
+      sig+=((g_jnWins+g_jnLoss)>0 ? "S1" : "S0");
+
+      for(int r=0;r<dRows;r++)
+      {
+         sig+="|"+IntegerToString(dState[r])+":"+
+              IntegerToString(g_states[dState[r]].setupScore)+":"+
+              IntegerToString((int)g_states[dState[r]].setupDir)+":"+
+              (g_states[dState[r]].setupEarly ? "E" : "C")+":"+
+              (dFirst[r] ? "1" : "0")+":"+dTag[r];
+      }
+   }
+
+   // 5) Geometry.
+   int drawRows=MathMax(1,dRows);
+
+   int panelW=PANEL_W;
+   int panelH=ROWS_Y+(drawRows*ROW_H)+8+FOOT_H+PAD;
+
+   if(g_dashboardOpen)
+   {
+      g_boxW=panelW;
+      g_boxH=panelH;
+   }
+   else
+   {
+      g_boxW=LOGO_W;
+      g_boxH=LOGO_H;
+   }
+
+   ClampDashboard();
+
+   if(sig!=g_dashSig)
+   {
+      DeleteDashboardObjects();
+      g_dashSig=sig;
+   }
+
+   int x0=g_dashX;
+   int y0=g_dashY;
+
+   //---------------- minimized logo ----------------
+   if(!g_dashboardOpen)
+   {
+      CreateRect(PREFIX+"LOGO_BG",x0,y0,LOGO_W,LOGO_H,
+                 InpInkColor,InpInkColor);
+
+      CreateText(PREFIX+"LOGO_T","GLORYALGO",
+                 x0+10,y0+6,9,InpPanelColor,"Tahoma Bold");
+
+      if(activeTotal>0)
+      {
+         CreateRect(PREFIX+"LOGO_CHIP",x0+LOGO_W-28,y0+4,22,18,
+                    InpPanelColor,InpPanelColor);
+
+         CreateText(PREFIX+"LOGO_N",IntegerToString(activeTotal),
+                    x0+LOGO_W-17,y0+13,8,InpInkColor,
+                    "Tahoma Bold",ANCHOR_CENTER);
+      }
+
+      ChartRedraw(0);
+      return;
+   }
+
+   //---------------- panel + header ----------------
+   color hairline=C'230,227,218';
+   color emptyPip=C'207,203,192';
+   color neutralZone=C'216,212,200';
+   color lossColor=C'196,120,48';
+   color goodColor=C'62,142,91';
+
+   CreateRect(PREFIX+"PANEL",x0,y0,panelW,panelH,
+              InpPanelColor,InpBorderColor);
+
+   CreateText(PREFIX+"TITLE","CRT SETUPS",
+              x0+PAD,y0+12,10,InpInkColor,"Tahoma Bold");
+
+   g_minW=22;
+   g_minH=20;
+   g_minX=x0+panelW-PAD-g_minW;
+   g_minY=y0+8;
+
+   int pillW=78;
+   int pillH=20;
+   int pillX=g_minX-6-pillW;
+
+   CreateRect(PREFIX+"PILL",pillX,g_minY,pillW,pillH,
+              InpInkColor,InpInkColor);
+
+   CreateText(PREFIX+"PILL_T",
+              IntegerToString(activeTotal)+" ACTIVE",
+              pillX+(pillW/2),g_minY+(pillH/2),8,
+              InpPanelColor,"Tahoma Bold",ANCHOR_CENTER);
+
+   CreateRect(PREFIX+"MIN_BG",g_minX,g_minY,g_minW,g_minH,
+              InpRowColor,InpBorderColor);
+
+   CreateText(PREFIX+"MIN_T","-",
+              g_minX+(g_minW/2),g_minY+(g_minH/2),11,
+              InpInkColor,"Tahoma Bold",ANCHOR_CENTER);
+
+   // Killzone indicator.
+   int kz=KillzoneId(TimeCurrent());
+
+   string kzName="NO KILLZONE";
+
+   if(kz==1)
+      kzName="LDN KILLZONE";
+   else if(kz==2)
+      kzName="NY KILLZONE";
+
+   CreateText(PREFIX+"KZ",
+              ShortToString((ushort)0x25CF)+" "+kzName,
+              pillX-14,g_minY+4,8,
+              (kz>0 ? goodColor : InpMutedTextColor),
+              "Arial",ANCHOR_RIGHT_UPPER);
+
+   //---------------- filter chips ----------------
+   int rowX=x0+PAD;
+   int rowW=panelW-(2*PAD);
+
+   string chipText[5];
+   chipText[0]="ALL "+IntegerToString(cAll);
+   chipText[1]="BULL "+IntegerToString(cBull);
+   chipText[2]="BEAR "+IntegerToString(cBear);
+   chipText[3]="EARLY "+IntegerToString(cEarly);
+   chipText[4]="A+/A "+IntegerToString(cGood);
+
+   int chipX=rowX;
+
+   g_chipY=y0+CHIPS_Y;
+   g_chipH=20;
+
+   for(int k=0;k<5;k++)
+   {
+      int cw=(StringLen(chipText[k])*6)+22;
+
+      g_chipX[k]=chipX;
+      g_chipW[k]=cw;
+
+      bool on=(g_filter==k);
+      string cp=PREFIX+"CHIP"+IntegerToString(k);
+
+      CreateRect(cp,chipX,g_chipY,cw,g_chipH,
+                 (on ? InpInkColor : InpPanelColor),
+                 (on ? InpInkColor : InpBorderColor));
+
+      CreateText(cp+"_T",chipText[k],
+                 chipX+(cw/2),g_chipY+(g_chipH/2),8,
+                 (on ? InpPanelColor : InpMutedTextColor),
+                 "Tahoma Bold",ANCHOR_CENTER);
+
+      chipX+=cw+6;
+   }
+
+   //---------------- column headers ----------------
+   int hy=y0+HEADER_Y;
+
+   string heads[7]={"SYMBOL","TF","SIDE","SCORE","RR","PROGRESS  SL > ENTRY > TP2","AGE"};
+   int headX[7]={46,206,262,340,470,516,702};
+
+   for(int k=0;k<7;k++)
+      CreateText(PREFIX+"HD"+IntegerToString(k),heads[k],
+                 rowX+headX[k],hy,7,InpMutedTextColor,"Tahoma Bold");
+
+   CreateRect(PREFIX+"HDLN",rowX,hy+14,rowW,1,
+              InpBorderColor,InpBorderColor);
+
+   //---------------- rows ----------------
+   int rowsY=y0+ROWS_Y;
+   int maxScore=MaxSetupScore();
+   int pipCount=MathMin(maxScore,9);
+   datetime nowTime=TimeCurrent();
+
+   if(dRows==0)
+   {
+      CreateText(PREFIX+"EMPTY",
+                 (activeTotal==0 ? "No active setups" :
+                                   "No setups match this filter"),
+                 rowX+46,rowsY+12,InpFontSize,
+                 InpMutedTextColor,"Tahoma");
+   }
+
+   for(int r=0;r<dRows;r++)
+   {
+      int si=dState[r];
+
+      int ry=rowsY+(r*ROW_H);
+      string rp=PREFIX+"R"+IntegerToString(r)+"_";
+
+      bool bull=(g_states[si].setupDir==CRT_BULL);
+      bool early=g_states[si].setupEarly;
+
+      color sideColor=(bull ? InpBullColor : InpBearColor);
+
+      CreateRect(rp+"LN",rowX,ry+ROW_H-1,rowW,1,hairline,hairline);
+
+      // Grade chip.
+      CreateRect(rp+"GR",rowX,ry+7,34,24,sideColor,sideColor);
+
+      CreateText(rp+"GRT",GradeText(GradeRank(si)),
+                 rowX+17,ry+19,9,clrWhite,"Tahoma Bold",ANCHOR_CENTER);
+
+      // Symbol (shown once per group) + CONFLICT / ALIGNED tag.
+      if(dFirst[r])
+      {
+         CreateText(rp+"SYM",ShortSymbol(g_states[si].symbol),
+                    rowX+46,ry+(dTag[r]!="" ? 6 : 11),InpFontSize,
+                    InpInkColor,"Tahoma Bold");
+
+         if(dTag[r]!="")
+            CreateText(rp+"TAG",dTag[r],
+                       rowX+46,ry+22,7,
+                       (dTag[r]=="CONFLICT" ? C'138,111,47' :
+                                              InpMutedTextColor),
+                       "Tahoma Bold");
+      }
+      else
+      {
+         CreateText(rp+"SUB",ShortToString((ushort)0x2514),
+                    rowX+52,ry+9,10,InpMutedTextColor,"Arial");
+      }
+
+      // Timeframe (+ EARLY tag).
+      CreateText(rp+"TF",TimeframeName(g_states[si].timeframe),
+                 rowX+206,ry+(early ? 6 : 11),InpFontSize,
+                 InpInkColor,"Tahoma Bold");
+
+      if(early)
+         CreateText(rp+"EARLY","EARLY",rowX+206,ry+22,7,
+                    InpMutedTextColor,"Tahoma Bold");
+
+      // Side chip.
+      CreateRect(rp+"SD",rowX+262,ry+8,66,22,sideColor,sideColor);
+
+      CreateText(rp+"ARW",
+                 ShortToString((ushort)(bull ? 0x25B2 : 0x25BC)),
+                 rowX+270,ry+12,8,clrWhite,"Arial");
+
+      CreateText(rp+"SDT",(bull ? "BULL" : "BEAR"),
+                 rowX+284,ry+11,InpFontSize,clrWhite,"Tahoma Bold");
+
+      // Score pips + score.
+      for(int p=0;p<pipCount;p++)
+      {
+         color pipColor=(p<g_states[si].setupScore ? sideColor : emptyPip);
+
+         CreateRect(rp+"P"+IntegerToString(p),
+                    rowX+340+(p*10),ry+13,7,12,pipColor,pipColor);
+      }
+
+      CreateText(rp+"SC",
+                 IntegerToString(g_states[si].setupScore)+"/"+
+                 IntegerToString(maxScore),
+                 rowX+340+(pipCount*10)+4,ry+12,8,
+                 InpInkColor,"Tahoma Bold");
+
+      // Planned RR.
+      CreateText(rp+"RR",
+                 (g_states[si].setupRR>0.0 ?
+                  DoubleToString(g_states[si].setupRR,1)+"R" : "--"),
+                 rowX+470,ry+11,InpFontSize,InpInkColor,"Tahoma Bold");
+
+      // Progress bar: SL (left) ... entry ... TP2 (right).
+      int barX=rowX+516;
+      int barY=ry+15;
+      int barW=130;
+
+      double liveR=0.0;
+      bool hasLive=LiveR(si,liveR);
+
+      double nowPrice=g_states[si].setupEntry;
+
+      if(hasLive)
+         nowPrice=SymbolInfoDouble(g_states[si].symbol,
+                                   bull ? SYMBOL_BID : SYMBOL_ASK);
+
+      int pe=(int)MathRound(BarPos(si,g_states[si].setupEntry)*barW);
+      int pn=(int)MathRound(BarPos(si,nowPrice)*barW);
+
+      int lo=MathMin(pe,pn);
+      int hi=MathMax(pe,pn);
+
+      color tint=Lighten(sideColor,0.65);
+      color moveColor=(pn>=pe ? sideColor : lossColor);
+
+      CreateRect(rp+"Z1",barX,barY,MathMax(1,pe),8,
+                 neutralZone,neutralZone);
+
+      CreateRect(rp+"Z2",barX+pe,barY,MathMax(1,barW-pe),8,
+                 tint,tint);
+
+      CreateRect(rp+"Z3",barX+lo,barY,MathMax(1,hi-lo),8,
+                 moveColor,moveColor);
+
+      CreateRect(rp+"TE",barX+pe-1,barY-3,2,14,
+                 InpInkColor,InpInkColor);
+
+      CreateText(rp+"DOT",ShortToString((ushort)0x25CF),
+                 barX+pn,barY+4,11,InpInkColor,"Arial",ANCHOR_CENTER);
+
+      CreateText(rp+"LIVE",
+                 (hasLive ?
+                  (liveR>=0.0 ? "+" : "")+DoubleToString(liveR,1)+"R" :
+                  "--"),
+                 barX+barW+10,ry+12,8,
+                 (liveR>=0.0 ? InpInkColor : lossColor),
+                 "Tahoma Bold");
+
+      // Age since CISD confirmed.
+      long ageSeconds=0;
+
+      if(g_states[si].setupFormTime>0)
+         ageSeconds=(long)(nowTime-g_states[si].setupFormTime);
+
+      CreateText(rp+"AGE",FormatAge(ageSeconds),
+                 rowX+702,ry+12,8,InpMutedTextColor,"Tahoma");
+
+      // Hover text: plain-language checklist of the setup.
+      string tip=SetupTooltip(si);
+
+      string parts[]={"GR","GRT","SD","ARW","SDT","SC","RR",
+                      "Z1","Z2","Z3","DOT"};
+
+      for(int p=0;p<ArraySize(parts);p++)
+         ObjectSetString(0,rp+parts[p],OBJPROP_TOOLTIP,tip);
+   }
+
+   //---------------- footer ----------------
+   int footY=rowsY+(drawRows*ROW_H)+8;
+
+   CreateText(PREFIX+"STATS",StatsLine(),
+              rowX+2,footY+4,8,InpMutedTextColor,"Tahoma Bold");
+
+   if(g_jnLastCount>0)
+   {
+      int resX=rowX+rowW-(g_jnLastCount*24);
+
+      CreateText(PREFIX+"LASTLBL","LAST",
+                 resX-8,footY+5,8,InpMutedTextColor,
+                 "Tahoma Bold",ANCHOR_RIGHT_UPPER);
+
+      for(int q=0;q<g_jnLastCount;q++)
+      {
+         bool win=(g_jnLast[q]==1);
+         color rc=(win ? InpBullColor : InpBearColor);
+         string rn=PREFIX+"RES"+IntegerToString(q);
+
+         CreateRect(rn,resX+(q*24),footY+2,20,18,rc,rc);
+
+         CreateText(rn+"_T",(win ? "W" : "L"),
+                    resX+(q*24)+10,footY+11,8,clrWhite,
+                    "Tahoma Bold",ANCHOR_CENTER);
+      }
+   }
+
+   ChartRedraw(0);
+}
+
+//------------------------- SCAN ALL --------------------------------//
+void ScanAll()
+{
+   MAAnalyzeAll();
+   for(int i=0;i<g_stateCount;i++)
+      ScanState(i);
+
+   DrawChartObjects();
+   DrawDashboard();
+}
+
+//------------------------- OPEN / MINIMIZE -------------------------//
+void OpenDashboard()
+{
+   if(g_dashboardOpen)
+      return;
+
+   g_dashboardOpen=true;
+   g_dashSig="";
+   GlobalVariableSet("GA_CRT_OPEN",1.0);
+
+   DrawDashboard();
+}
+
+void MinimizeDashboard()
+{
+   if(!g_dashboardOpen)
+      return;
+
+   g_dashboardOpen=false;
+   g_dashSig="";
+   GlobalVariableSet("GA_CRT_OPEN",0.0);
+
+   DrawDashboard();
+}
+
+//------------------------- FILTER ----------------------------------//
+void SetFilter(int filter)
+{
+   if(filter<0 || filter>4)
+      filter=0;
+
+   g_filter=filter;
+   g_dashSig="";
+
+   GlobalVariableSet("GA_CRT_FILTER",(double)filter);
+
+   DrawDashboard();
+}
+
+//------------------------- MOUSE HANDLING --------------------------//
+// 0 = nothing, 1 = logo, 2 = panel (drag handle),
+// 3 = minimize button, 10..14 = filter chips
+int HitTest(int mx,int my)
+{
+   if(mx<g_dashX || my<g_dashY ||
+      mx>g_dashX+g_boxW || my>g_dashY+g_boxH)
+      return 0;
+
+   if(!g_dashboardOpen)
+      return 1;
+
+   if(mx>=g_minX-4 && mx<=g_minX+g_minW+4 &&
+      my>=g_minY-4 && my<=g_minY+g_minH+4)
+      return 3;
+
+   if(my>=g_chipY && my<=g_chipY+g_chipH)
+   {
+      for(int k=0;k<5;k++)
+      {
+         if(mx>=g_chipX[k] && mx<=g_chipX[k]+g_chipW[k])
+            return 10+k;
+      }
+   }
+
+   return 2;
+}
+
+// Stops the chart from scrolling while the cursor is on the
+// dashboard or while it is being dragged.
+void SetScrollLock(bool lock)
+{
+   if(lock==g_scrollLocked)
+      return;
+
+   g_scrollLocked=lock;
+
+   if(lock)
+      ChartSetInteger(0,CHART_MOUSE_SCROLL,false);
+   else
+      ChartSetInteger(0,CHART_MOUSE_SCROLL,g_origScroll);
+}
+
+void HandleMouse(int mx,int my,uint flags)
+{
+   bool down=((flags & 1)!=0);
+   int target=HitTest(mx,my);
+
+   SetScrollLock(g_dragging || target!=0);
+
+   if(down && !g_prevDown)
+   {
+      // Button pressed.
+      g_pressTarget=target;
+      g_pressX=mx;
+      g_pressY=my;
+      g_startX=g_dashX;
+      g_startY=g_dashY;
+      g_dragging=false;
+   }
+   else if(down && g_prevDown)
+   {
+      // Button held: drag from the logo or anywhere on the panel.
+      if(g_pressTarget==1 || g_pressTarget==2)
+      {
+         if(!g_dragging &&
+            (MathAbs(mx-g_pressX)>4 || MathAbs(my-g_pressY)>4))
+            g_dragging=true;
+
+         if(g_dragging)
+         {
+            g_dashX=g_startX+(mx-g_pressX);
+            g_dashY=g_startY+(my-g_pressY);
+
+            DrawDashboard();
+         }
+      }
+   }
+   else if(!down && g_prevDown)
+   {
+      // Button released.
+      if(g_dragging)
+      {
+         SavePosition();
+         g_dragging=false;
+      }
+      else
+      {
+         if(g_pressTarget==1 && target==1)
+         {
+            g_prevDown=down;
+            OpenDashboard();
+            g_pressTarget=0;
+            return;
+         }
+
+         if(g_pressTarget==3 && target==3)
+         {
+            g_prevDown=down;
+            MinimizeDashboard();
+            g_pressTarget=0;
+            return;
+         }
+
+         if(g_pressTarget>=10 && target==g_pressTarget)
+         {
+            g_prevDown=down;
+            SetFilter(target-10);
+            g_pressTarget=0;
+            return;
+         }
+      }
+
+      g_pressTarget=0;
+   }
+
+   g_prevDown=down;
+}
+
+//------------------------- INITIALIZATION --------------------------//
+int OnInit()
+{
+   LoadSymbols();
+   LoadTimeframes();
+
+   if(g_symbolCount<=0)
+   {
+      Print("GloryAlgo: No valid symbols loaded.");
+      return INIT_FAILED;
+   }
+
+   if(g_timeframeCount<=0)
+   {
+      Print("GloryAlgo: No valid timeframes loaded.");
+      return INIT_FAILED;
+   }
+
+   InitializeStates();
+
+   BuildInitialCRTHistory();
+
+   JournalLoad();
+   JournalPrint();
+
+   int interval=InpScanIntervalSeconds;
+
+   if(interval<1)
+      interval=1;
+
+   if(!EventSetTimer(interval))
+   {
+      Print("GloryAlgo: Timer initialization failed. Error: ",
+            GetLastError());
+      return INIT_FAILED;
+   }
+
+   g_origScroll=(bool)ChartGetInteger(0,CHART_MOUSE_SCROLL);
+   g_scrollLocked=false;
+
+   ChartSetInteger(0,CHART_EVENT_MOUSE_MOVE,true);
+
+   LoadPosition();
+
+   if(GlobalVariableCheck("GA_CRT_FILTER"))
+      g_filter=(int)GlobalVariableGet("GA_CRT_FILTER");
+
+   if(g_filter<0 || g_filter>4)
+      g_filter=0;
+
+   g_dashboardOpen=(GlobalVariableCheck("GA_CRT_OPEN") &&
+                    GlobalVariableGet("GA_CRT_OPEN")>0.5);
+   g_dashSig="";
+   g_firstScanDone=false;
+
+   for(int i=0;i<g_stateCount;i++)
+      ScanState(i);
+
+   g_firstScanDone=true;
+
+   MAAnalyzeAll();
+   DrawChartObjects();
+   DrawDashboard();
+
+   Print("GloryAlgo CRT Scanner v1.97 initialized. Symbols: ",
+         g_symbolCount,
+         " | Timeframes: ",g_timeframeCount,
+         " | Min setup score: ",InpMinSetupScore,"/",MaxSetupScore(),
+         " | FVG filter: ",InpEnableFVGFilter,
+         " | CISD: ",InpEnableCISD);
+
+   return INIT_SUCCEEDED;
+}
+
+//------------------------- TIMER -----------------------------------//
+void OnTimer()
+{
+   ScanAll();
+}
+
+//------------------------- CHART INTERACTION ------------------------//
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+{
+   if(id==CHARTEVENT_MOUSE_MOVE)
+   {
+      HandleMouse((int)lparam,
+                  (int)dparam,
+                  (uint)StringToInteger(sparam));
+      return;
+   }
+
+   if(id==CHARTEVENT_CHART_CHANGE)
+   {
+      DrawDashboard();
+      return;
+   }
+}
+
+//------------------------- TICK ------------------------------------//
+void OnTick()
+{
+   // Timer-based scanning checks all selected symbols/timeframes.
+}
+
+//------------------------- DEINITIALIZATION ------------------------//
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+
+   ChartSetInteger(0,CHART_MOUSE_SCROLL,g_origScroll);
+   ChartSetInteger(0,CHART_EVENT_MOUSE_MOVE,false);
+
+   DeleteAllObjects();
+   ObjectsDeleteAll(0,MA_PREFIX);
+   ObjectsDeleteAll(0,PA_PREFIX);
+
+   ChartRedraw(0);
+}
+//+------------------------------------------------------------------+
