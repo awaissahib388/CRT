@@ -1625,9 +1625,10 @@ void MAWriteLog(const MAFrame &f)
       (int)f.rangeAcceptedUp,(int)f.rangeAcceptedDown,(int)f.bullRetest,(int)f.bearRetest,(int)f.bullVI,(int)f.bearVI,
       DoubleToString(f.kissingLevel,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.supportTrendlineValid,(int)f.resistanceTrendlineValid,
       (int)f.bullQML,(int)f.bearQML,f.dolName,DoubleToString(f.dolPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),
-      DoubleToString(f.inducementPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),f.targetName,DoubleToString(f.targetPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.targetValid,(int)f.targetReached,(int)f.demandFlip,(int)f.supplyFlip,
-      (int)f.mitigationDemand,(int)f.mitigationSupply,(int)f.liquiditySNR,
-      (int)f.bullIFVG,(int)f.bearIFVG,(int)f.bullEngulfFlip,(int)f.bearEngulfFlip);
+      DoubleToString(f.inducementPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.demandFlip,(int)f.supplyFlip,
+       (int)f.mitigationDemand,(int)f.mitigationSupply,(int)f.liquiditySNR,
+       (int)f.bullIFVG,(int)f.bearIFVG,(int)f.bullEngulfFlip,(int)f.bearEngulfFlip,
+       f.targetName,DoubleToString(f.targetPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)),(int)f.targetValid,(int)f.targetReached);
    FileClose(h);
 }
 
