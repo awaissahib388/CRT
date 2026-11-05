@@ -35,32 +35,32 @@ enum ENUM_FVG_PERMISSION
 };
 
 //------------------------- INPUTS ----------------------------------//
-input group "01. SYMBOLS"
+input group "01. SYMBOLS — WHAT TO SCAN"
 input ENUM_SYMBOL_SOURCE InpSymbolSource=SYMBOLS_BOTH;
 input string InpManualSymbols="EURUSD,GBPUSD,USDJPY,XAUUSD";
 input int InpMaxSymbols=100;
 
-input group "02. TIMEFRAMES"
+input group "02. TIMEFRAMES — SCAN PERIODS"
 input string InpTimeframes="M5,M15,M30,H1,H4,D1";
 
-input group "03. SCANNER"
+input group "03. SCANNER — SPEED & ALERTS"
 input int InpScanIntervalSeconds=2;
 input bool InpEnableSetupAlerts=true;
 input bool InpEnablePushNotifications=false;
 
-input group "04. HTF FVG FILTER"
+input group "04. HIGHER-TIMEFRAME FVG FILTER"
 input bool InpEnableFVGFilter=false;
 input int InpFVGLookback=100;
 input ENUM_FVG_PERMISSION InpBullCRT_FVGPermission=FVG_PERMISSION_BULLISH;
 input ENUM_FVG_PERMISSION InpBearCRT_FVGPermission=FVG_PERMISSION_BEARISH;
 input bool InpSetupRequireFVG=true;   // Dashboard setup requires an HTF FVG touch by C2
 
-input group "05. CISD"
+input group "05. CISD — CONFIRMATION"
 input bool InpEnableCISD=true;          // Controls CISD chart-state/level display; setup confirmation is always mandatory
 input bool InpDrawCISDLevels=true;
 input int InpCISDLookbackCRTCandles=2;   // How many CRT-candle lengths left of C2 the reference search may reach
 
-input group "05B. SETUP CONFLUENCES"
+input group "06. SETUP FILTERS & CONFLUENCES"
 input int InpMinSetupScore=4;             // Minimum optional-confluence score (default 4 of 5)
 input bool InpUseHTFCRTConfluence=true;   // +1 when nearest higher TF has a same-direction CRT
 input bool InpUseKillzones=true;          // +1 when CISD formed inside a killzone (intraday CRTs)
@@ -92,9 +92,9 @@ input string InpSMTPairs="EURUSD:GBPUSD,GBPUSD:EURUSD,AUDUSD:NZDUSD,NZDUSD:AUDUS
 input bool   InpJournal=true;             // Log closed setups to a CSV file and show the win rate
 input string InpJournalFile="GloryAlgo_Setups_Liquidity_v2.csv";
 
-input group "05C. STRUCTURE & PRICE ACTION RULES"
+input group "07. MARKET STRUCTURE — DETECTION SETTINGS"
 input bool Show_Market_Analysis=true;
-input bool Show_Analysis_Summary=false;
+input bool Show_Analysis_Summary=true;
 input bool Save_Analysis_Log=true;
 input int Bars_To_Check=600;
 input int Small_Swing_Left_Bars=2;
@@ -113,7 +113,7 @@ input int Save_Analysis_Every_Minutes=15;
 input bool Show_Analysis_Price_Levels=true;
 input int Bars_To_Find_Recent_Patterns=12;
 
-input group "05D. PRICE ACTION ON CHART"
+input group "08. CHART DISPLAY — STRUCTURE & PRICE ACTION"
 input bool Show_Price_Action_On_Chart=true;             // Show structure and price-action labels on this chart
 input bool Show_All_Timeframes=false;           // Show labels from every analysed timeframe
 input bool Show_Major_Swings=true;      // HH, HL, LH, LL, EQH and EQL
@@ -129,7 +129,7 @@ input int Maximum_Swing_Labels_Per_Timeframe=80;          // Limit swing labels 
 input int Chart_Label_Size=8;                     // Chart label size
 input color Neutral_Analysis_Color=C'94,93,87';
 
-input group "06. CHART OBJECTS"
+input group "09. CHART OBJECTS — CRT & FVG"
 input bool InpDrawFVGZones=true;
 input bool InpDrawCRTLevels=true;
 input bool InpFilterByChartTimeframe=true;   // Show only the CRT paired with the current chart timeframe
@@ -145,13 +145,13 @@ input int InpCRTLineWidth=2;
 input ENUM_LINE_STYLE InpCRTLineStyle=STYLE_SOLID;
 input int InpCRTLabelFontSize=8;
 
-input group "07. DASHBOARD"
+input group "10. DASHBOARD — POSITION & SIZE"
 input int InpDashboardX=15;          // Default X (drag to move, position is remembered)
 input int InpDashboardY=25;          // Default Y
 input int InpDashboardMaxRows=12;       // Max setup rows shown
 input int InpFontSize=9;
 
-input group "08. COLOURS"
+input group "11. COLOURS — DASHBOARD"
 input color InpPanelColor=C'250,249,245';
 input color InpRowColor=C'239,237,230';
 input color InpBorderColor=C'216,213,203';
@@ -458,6 +458,7 @@ struct MAFrame
    bool bearInducement;
    double inducementPrice;
    double dolPrice;
+   double modelTarget;
    string dolName;
    bool demandFlip;
    bool supplyFlip;
@@ -580,7 +581,7 @@ bool MAAnalyzeFrame(string symbol,ENUM_TIMEFRAMES tf,MAFrame &out)
    out.bullEngulfFlip=false; out.bearEngulfFlip=false; out.viLow=0.0; out.viHigh=0.0; out.kissingCandle=false; out.kissingLevel=0.0;
    out.supportTrendlineValid=false; out.resistanceTrendlineValid=false; out.supportTrendlineTouch=false; out.resistanceTrendlineTouch=false;
    out.supportTrendlineNow=0.0; out.resistanceTrendlineNow=0.0; out.bullQML=false; out.bearQML=false; out.bullQMLLevel=0.0; out.bearQMLLevel=0.0;
-   out.bullInducement=false; out.bearInducement=false; out.inducementPrice=0.0; out.dolPrice=0.0; out.dolName="NONE";
+   out.bullInducement=false; out.bearInducement=false; out.inducementPrice=0.0; out.dolPrice=0.0; out.modelTarget=0.0; out.dolName="NONE";
    out.demandFlip=false; out.supplyFlip=false; out.mitigationDemand=false; out.mitigationSupply=false;
    out.demandFreshness=0; out.supplyFreshness=0; out.demandMissedBars=0; out.supplyMissedBars=0; out.liquiditySNR=false; out.lastClosedBar=0;
    MqlRates r[]; ArraySetAsSeries(r,true);
@@ -878,22 +879,46 @@ bool MAAnalyzeFrame(string symbol,ENUM_TIMEFRAMES tf,MAFrame &out)
       }
    }
 
-   // DOL and inducement candidates. DOL is a target hypothesis, not a direction signal.
+   // RANGE / DOL / PROJECTED TARGET.
+   // A sell-side sweep and reclaim points toward buy-side liquidity; a
+   // buy-side sweep and reclaim points toward sell-side liquidity.
+   // Target = one dealing-range height projected from the manipulation wick.
+   // This target is independent of the CRT setup take-profit.
    if(out.rangeValid)
    {
-      if(out.state==MA_STATE_BULL || (out.state==MA_STATE_RANGE && r[1].close<out.eq))
-      {out.dolPrice=out.rangeHigh;out.dolName="ERL HIGH";}
-      else if(out.state==MA_STATE_BEAR || (out.state==MA_STATE_RANGE && r[1].close>=out.eq))
-      {out.dolPrice=out.rangeLow;out.dolName="ERL LOW";}
-      if(out.dolPrice>0.0)
+      double dealingRange=out.rangeHigh-out.rangeLow;
+      if(out.bullSweep && !out.bearSweep)
       {
-         for(int z=minorN-1;z>=0;z--)
-         {
-            if(out.dolName=="ERL HIGH" && !minor[z].isHigh && minor[z].time<r[1].time)
-            {out.bullInducement=true;out.inducementPrice=minor[z].price;break;}
-            if(out.dolName=="ERL LOW" && minor[z].isHigh && minor[z].time<r[1].time)
-            {out.bearInducement=true;out.inducementPrice=minor[z].price;break;}
-         }
+         out.dolPrice=out.rangeHigh;
+         out.dolName="BUY-SIDE LIQUIDITY";
+         out.modelTarget=r[1].low+dealingRange;
+      }
+      else if(out.bearSweep && !out.bullSweep)
+      {
+         out.dolPrice=out.rangeLow;
+         out.dolName="SELL-SIDE LIQUIDITY";
+         out.modelTarget=r[1].high-dealingRange;
+      }
+      else if(out.state==MA_STATE_BULL ||
+              (out.state==MA_STATE_RANGE && r[1].close<out.eq))
+      {
+         out.dolPrice=out.rangeHigh;
+         out.dolName="BUY-SIDE LIQUIDITY";
+      }
+      else
+      {
+         out.dolPrice=out.rangeLow;
+         out.dolName="SELL-SIDE LIQUIDITY";
+      }
+
+      for(int z=minorN-1;z>=0;z--)
+      {
+         if(out.dolName=="BUY-SIDE LIQUIDITY" && !minor[z].isHigh &&
+            minor[z].time<r[1].time)
+         {out.bullInducement=true;out.inducementPrice=minor[z].price;break;}
+         if(out.dolName=="SELL-SIDE LIQUIDITY" && minor[z].isHigh &&
+            minor[z].time<r[1].time)
+         {out.bearInducement=true;out.inducementPrice=minor[z].price;break;}
       }
    }
 
@@ -1100,6 +1125,7 @@ void MADrawPanel()
       text+="SUPPLY  "+(f.supplyActive ? DoubleToString(f.supplyLow,_Digits)+" - "+DoubleToString(f.supplyHigh,_Digits) : "NONE")+"\n";
       text+="EXPANSION  "+(f.rangeAcceptedUp ? "ACCEPTED UP" : (f.rangeAcceptedDown ? "ACCEPTED DOWN" : (f.expansionUp ? "UP CANDIDATE" : (f.expansionDown ? "DOWN CANDIDATE" : "NONE"))))+"\n";
       text+="DOL  "+f.dolName+(f.dolPrice>0.0 ? " @ "+DoubleToString(f.dolPrice,_Digits) : "")+"\n";
+      text+="TARGET  "+(f.modelTarget>0.0 ? DoubleToString(f.modelTarget,_Digits) : "WAITING FOR SWEEP")+"\\n";
       text+="IDM  "+(f.bullInducement ? "BULL "+DoubleToString(f.inducementPrice,_Digits) : (f.bearInducement ? "BEAR "+DoubleToString(f.inducementPrice,_Digits) : "NONE"))+"\n";
       text+="RETEST  "+(f.bullRetest ? "BULL " : "")+(f.bearRetest ? "BEAR" : (f.bullRetest ? "" : "NONE"))+"\n";
       text+="VI  "+(f.bullVI ? "BULL" : (f.bearVI ? "BEAR" : "NONE"))+"  KISSING "+(f.kissingCandle ? DoubleToString(f.kissingLevel,_Digits) : "NONE")+"\n";
@@ -1112,6 +1138,7 @@ void MADrawPanel()
       if(Show_Analysis_Price_Levels)
       {
          MADrawLevel("DOL",f.dolPrice,InpBearColor,STYLE_DASH);
+         MADrawLevel("MODEL_TARGET",f.modelTarget,InpBullColor,STYLE_DASHDOT);
          MADrawLevel("IDM",f.inducementPrice,InpMutedTextColor,STYLE_DOT);
          MADrawLevel("PCZ",(f.pocFound ? f.pocLevel : 0.0),InpInkColor,STYLE_DASHDOT);
          MADrawLevel("KISSING",(f.kissingCandle ? f.kissingLevel : 0.0),InpBullColor,STYLE_DOT);
@@ -1350,6 +1377,7 @@ void PADrawFrameVisuals(const MAFrame &f)
          PADrawHLine(PA_PREFIX+tf+"_DOL",f.dolPrice,"DOL CANDIDATE: "+f.dolName+" | "+tf,Neutral_Analysis_Color,STYLE_DASHDOT);
          PADrawText(PAObjectKey(tf,"DOL",eventTime),eventTime,f.dolPrice,"DOL | "+tf,Neutral_Analysis_Color,Chart_Label_Size);
       }
+      PADrawHLine(PA_PREFIX+tf+"_MODEL_TARGET",f.modelTarget,"Projected Target | "+tf,InpBullColor,STYLE_DASH);
    }
 
    if(Show_Trading_Range_Levels && f.rangeValid)
@@ -1489,7 +1517,8 @@ void PADrawStatusPanel()
    text+="PROTECTED HIGH: "+PAStatus(checked,f.protectedHighActive)+" | LOW: "+PAStatus(checked,f.protectedLowActive)+"\n";
    text+="RANGE: "+PAStatus(checked,f.rangeValid)+" | LOCATION: "+(checked && f.rangeValid ? MARangeLocation(f.rangePos) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
    text+="LIQUIDITY SWEEP: "+PAStatus(checked,(f.bullSweep || f.bearSweep))+"\n";
-   text+="IDM: "+PAStatus(checked,(f.bullInducement || f.bearInducement))+" | DOL: "+(checked && f.dolPrice>0.0 ? "CANDIDATE" : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
+   text+="IDM: "+PAStatus(checked,(f.bullInducement || f.bearInducement))+" | DOL: "+(checked && f.dolPrice>0.0 ? DoubleToString(f.dolPrice,digits) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
+    text+="TARGET: "+(checked && f.modelTarget>0.0 ? DoubleToString(f.modelTarget,digits) : (checked ? "WAITING FOR SWEEP" : "NOT CHECKED"))+"\\n";
    text+="FVG TOUCH: "+PAStatus(checked,(f.bullFVG || f.bearFVG))+" | IFVG: "+PAStatus(checked,(f.bullIFVG || f.bearIFVG))+"\n";
    text+="VI: "+PAStatus(checked,(f.bullVI || f.bearVI))+" | KISSING: "+PAStatus(checked,f.kissingCandle)+"\n";
    text+="ENGULFING: "+PAStatus(checked,(f.bullishEngulf || f.bearishEngulf))+" | FAILED BREAK: "+PAStatus(checked,(f.failedBreakUp || f.failedBreakDown))+"\n";
@@ -1600,7 +1629,6 @@ ENUM_TIMEFRAMES ParseTimeframe(string value)
    if(value=="M15") return PERIOD_M15;
    if(value=="M20") return PERIOD_M20;
    if(value=="M30") return PERIOD_M30;
-   if(value=="M45") return PERIOD_M45;
 
    if(value=="H1")  return PERIOD_H1;
    if(value=="H2")  return PERIOD_H2;
