@@ -1327,7 +1327,6 @@ void PADrawFrameVisuals(const MAFrame &f)
 {
    if(f.symbol!=Symbol() || f.lastClosedBar<=0) return;
    string tf=PATFCode(f.tf);
-   int digits=(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS);
    MqlRates r[];
    ArraySetAsSeries(r,true);
    int copied=CopyRates(f.symbol,f.tf,0,MathMax(80,History_Bars_To_Show),r);
@@ -1518,8 +1517,8 @@ void PADrawStatusPanel()
    text+="PROTECTED HIGH: "+PAStatus(checked,f.protectedHighActive)+" | LOW: "+PAStatus(checked,f.protectedLowActive)+"\n";
    text+="RANGE: "+PAStatus(checked,f.rangeValid)+" | LOCATION: "+(checked && f.rangeValid ? MARangeLocation(f.rangePos) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
    text+="LIQUIDITY SWEEP: "+PAStatus(checked,(f.bullSweep || f.bearSweep))+"\n";
-   text+="IDM: "+PAStatus(checked,(f.bullInducement || f.bearInducement))+" | DOL: "+(checked && f.dolPrice>0.0 ? DoubleToString(f.dolPrice,digits) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
-    text+="TARGET: "+(checked && f.modelTarget>0.0 ? DoubleToString(f.modelTarget,digits) : (checked ? "WAITING FOR SWEEP" : "NOT CHECKED"))+"\n";
+   text+="IDM: "+PAStatus(checked,(f.bullInducement || f.bearInducement))+" | DOL: "+(checked && f.dolPrice>0.0 ? DoubleToString(f.dolPrice,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
+    text+="TARGET: "+(checked && f.modelTarget>0.0 ? DoubleToString(f.modelTarget,(int)SymbolInfoInteger(f.symbol,SYMBOL_DIGITS)) : (checked ? "WAITING FOR SWEEP" : "NOT CHECKED"))+"\n";
    text+="FVG TOUCH: "+PAStatus(checked,(f.bullFVG || f.bearFVG))+" | IFVG: "+PAStatus(checked,(f.bullIFVG || f.bearIFVG))+"\n";
    text+="VI: "+PAStatus(checked,(f.bullVI || f.bearVI))+" | KISSING: "+PAStatus(checked,f.kissingCandle)+"\n";
    text+="ENGULFING: "+PAStatus(checked,(f.bullishEngulf || f.bearishEngulf))+" | FAILED BREAK: "+PAStatus(checked,(f.failedBreakUp || f.failedBreakDown))+"\n";
