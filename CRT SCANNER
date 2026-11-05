@@ -1125,7 +1125,7 @@ void MADrawPanel()
       text+="SUPPLY  "+(f.supplyActive ? DoubleToString(f.supplyLow,_Digits)+" - "+DoubleToString(f.supplyHigh,_Digits) : "NONE")+"\n";
       text+="EXPANSION  "+(f.rangeAcceptedUp ? "ACCEPTED UP" : (f.rangeAcceptedDown ? "ACCEPTED DOWN" : (f.expansionUp ? "UP CANDIDATE" : (f.expansionDown ? "DOWN CANDIDATE" : "NONE"))))+"\n";
       text+="DOL  "+f.dolName+(f.dolPrice>0.0 ? " @ "+DoubleToString(f.dolPrice,_Digits) : "")+"\n";
-      text+="TARGET  "+(f.modelTarget>0.0 ? DoubleToString(f.modelTarget,_Digits) : "WAITING FOR SWEEP")+"\\n";
+      text+="TARGET  "+(f.modelTarget>0.0 ? DoubleToString(f.modelTarget,_Digits) : "WAITING FOR SWEEP")+"\n";
       text+="IDM  "+(f.bullInducement ? "BULL "+DoubleToString(f.inducementPrice,_Digits) : (f.bearInducement ? "BEAR "+DoubleToString(f.inducementPrice,_Digits) : "NONE"))+"\n";
       text+="RETEST  "+(f.bullRetest ? "BULL " : "")+(f.bearRetest ? "BEAR" : (f.bullRetest ? "" : "NONE"))+"\n";
       text+="VI  "+(f.bullVI ? "BULL" : (f.bearVI ? "BEAR" : "NONE"))+"  KISSING "+(f.kissingCandle ? DoubleToString(f.kissingLevel,_Digits) : "NONE")+"\n";
@@ -1518,7 +1518,7 @@ void PADrawStatusPanel()
    text+="RANGE: "+PAStatus(checked,f.rangeValid)+" | LOCATION: "+(checked && f.rangeValid ? MARangeLocation(f.rangePos) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
    text+="LIQUIDITY SWEEP: "+PAStatus(checked,(f.bullSweep || f.bearSweep))+"\n";
    text+="IDM: "+PAStatus(checked,(f.bullInducement || f.bearInducement))+" | DOL: "+(checked && f.dolPrice>0.0 ? DoubleToString(f.dolPrice,digits) : (checked ? "NOT FOUND" : "NOT CHECKED"))+"\n";
-    text+="TARGET: "+(checked && f.modelTarget>0.0 ? DoubleToString(f.modelTarget,digits) : (checked ? "WAITING FOR SWEEP" : "NOT CHECKED"))+"\\n";
+    text+="TARGET: "+(checked && f.modelTarget>0.0 ? DoubleToString(f.modelTarget,digits) : (checked ? "WAITING FOR SWEEP" : "NOT CHECKED"))+"\n";
    text+="FVG TOUCH: "+PAStatus(checked,(f.bullFVG || f.bearFVG))+" | IFVG: "+PAStatus(checked,(f.bullIFVG || f.bearIFVG))+"\n";
    text+="VI: "+PAStatus(checked,(f.bullVI || f.bearVI))+" | KISSING: "+PAStatus(checked,f.kissingCandle)+"\n";
    text+="ENGULFING: "+PAStatus(checked,(f.bullishEngulf || f.bearishEngulf))+" | FAILED BREAK: "+PAStatus(checked,(f.failedBreakUp || f.failedBreakDown))+"\n";
