@@ -7,7 +7,7 @@
 //|                 Command Center + PA chart verification layer    |
 //+------------------------------------------------------------------+
 #property strict
-#property version "1.97"
+#property version "1.98"
 #property description "GloryAlgo CRT Scanner - CRT/CISD with visible structure and price-action verification"
 
 //------------------------- ENUMS -----------------------------------//
@@ -53,7 +53,7 @@ input bool InpEnableFVGFilter=false;
 input int InpFVGLookback=100;
 input ENUM_FVG_PERMISSION InpBullCRT_FVGPermission=FVG_PERMISSION_BULLISH;
 input ENUM_FVG_PERMISSION InpBearCRT_FVGPermission=FVG_PERMISSION_BEARISH;
-input bool InpSetupRequireFVG=true;   // Dashboard setup requires an HTF FVG touch by C2
+input bool InpSetupRequireFVG=false;  // Optional explicit setup gate; HTF FVG context is informational by default
 
 input group "05. CISD"
 input bool InpEnableCISD=true;          // Controls CISD chart-state/level display; setup confirmation is always mandatory
@@ -82,7 +82,6 @@ input int InpSetupMaxAgeCandles=3;        // Expire after three complete CRT can
 input bool InpEarlySetups=false;          // Early setups disabled by default
 input int InpEarlyMinScore=5;             // If manually enabled, early setups require all five score points
 
-input bool   InpStrictCRT=true;           // C2 must sweep ONE side only (double sweeps are never directional)
 input double InpMinRR=4.0;                // Hard filter: minimum planned reward:risk (entry = CISD close)
 input bool   InpUseTrendEMA=true;         // EMA 24 alignment is a bonus tag only; no score point
 input int    InpTrendEMAPeriod=24;
@@ -1600,7 +1599,6 @@ ENUM_TIMEFRAMES ParseTimeframe(string value)
    if(value=="M15") return PERIOD_M15;
    if(value=="M20") return PERIOD_M20;
    if(value=="M30") return PERIOD_M30;
-   if(value=="M45") return PERIOD_M45;
 
    if(value=="H1")  return PERIOD_H1;
    if(value=="H2")  return PERIOD_H2;
@@ -1844,14 +1842,16 @@ void InitializeStates()
 ENUM_CRT_SIGNAL ClassifyCRT(const MqlRates &c1,
                             const MqlRates &c2)
 {
+   // CRT is evaluated from the completed C1/C2 OHLC relationship.
+   // A single-side sweep must close back through the swept C1 boundary.
    bool sweptHigh=(c2.high>c1.high);
    bool sweptLow=(c2.low<c1.low);
 
+   // A two-sided sweep is classified as DOUBLE only when C2 closes
+   // inside C1. A close outside the full C1 range is directional.
    if(sweptHigh && sweptLow)
    {
-      // Strict CRT: a candle that sweeps BOTH sides has no clear
-      // false side, so it is never a directional CRT.
-      if(InpStrictCRT)
+      if(c2.close>=c1.low && c2.close<=c1.high)
          return CRT_DOUBLE;
 
       if(c2.close>c1.high)
@@ -1859,9 +1859,6 @@ ENUM_CRT_SIGNAL ClassifyCRT(const MqlRates &c1,
 
       if(c2.close<c1.low)
          return CRT_BEAR;
-
-      if(c2.close>=c1.low && c2.close<=c1.high)
-         return CRT_DOUBLE;
 
       return CRT_NONE;
    }
@@ -3580,8 +3577,8 @@ void EvaluateCandidate(int i,const CRTCandidate &c,SetupEval &ev)
    if(InpUseTrendEMA)
       trendOK=CheckTrend(i,dir,c.c2Time); // informational bonus only; never blocks a setup
 
-   // HTF FVG touched by C2 (always required for early setups).
-   if(c.early || InpSetupRequireFVG)
+   // HTF FVG is context by default. It gates a setup only when the user explicitly enables the input.
+   if(InpSetupRequireFVG)
    {
       bool fvg=false;
 
