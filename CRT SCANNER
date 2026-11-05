@@ -88,7 +88,7 @@ input bool   InpUseTrendEMA=true;         // EMA 24 alignment is a bonus tag onl
 input int    InpTrendEMAPeriod=24;
 input bool   InpTrendOnHigherTF=false;    // false: EMA on the CRT timeframe, true: on the next higher timeframe
 input bool   InpUseSMT=true;              // +1 on SMT divergence with a correlated symbol
-input string InpSMTPairs="EURUSD:GBPUSD,GBPUSD:EURUSD,AUDUSD:NZDUSD,NZDUSD:AUDUSD,XAUUSD:XAGUSD,XAGUSD:XAUUSD,US30:US500,US500:US30,NAS100:US500";
+input string InpSMTPairs="EURUSD:USDX,EURUSD:GBPUSD,GBPUSD:EURUSD,AUDUSD:NZDUSD,NZDUSD:AUDUSD,XAUUSD:XAGUSD,XAGUSD:XAUUSD,US30:US500,US500:US30,NAS100:US500";
 input bool   InpJournal=true;             // Log closed setups to a CSV file and show the win rate
 input string InpJournalFile="GloryAlgo_Setups_Liquidity_v2.csv";
 
@@ -2957,8 +2957,43 @@ string GetSMTPartner(string symbol)
    return "";
 }
 
-// SMT divergence: our symbol swept C1's extreme, the correlated
-// partner did NOT sweep its own C1 extreme in the same candle.
+// Return the two most recent CONFIRMED swing points in a series array.
+// With series indexing, the smallest valid index is the newest swing.
+bool MAGetLatestTwoSMTPivots(const MqlRates &rates[],int copied,bool useHigh,
+                             int leftBars,int rightBars,
+                             double &latestValue,double &previousValue)
+{
+   if(leftBars<1 || rightBars<1 ||
+      copied<leftBars+rightBars+3)
+      return false;
+
+   int found=0;
+   for(int i=rightBars;i<=copied-leftBars-1;i++)
+   {
+      bool isPivot=(useHigh
+                    ? MAIsPivotHigh(rates,i,leftBars,rightBars)
+                    : MAIsPivotLow(rates,i,leftBars,rightBars));
+      if(!isPivot)
+         continue;
+
+      if(found==0)
+      {
+         latestValue=(useHigh ? rates[i].high : rates[i].low);
+         found=1;
+      }
+      else
+      {
+         previousValue=(useHigh ? rates[i].high : rates[i].low);
+         return true;
+      }
+   }
+   return false;
+}
+
+// Swing-based SMT: compare each instrument's two latest confirmed swings.
+// Swing timestamps are intentionally independent; they do NOT need to match.
+// EURUSD bearish: EURUSD makes HH while USDX fails to make LL.
+// EURUSD bullish: EURUSD makes LL while USDX fails to make HH.
 bool CheckSMT(int stateIndex,ENUM_CRT_SIGNAL dir,datetime c2Time)
 {
    string symbol=g_states[stateIndex].symbol;
@@ -2968,31 +3003,51 @@ bool CheckSMT(int stateIndex,ENUM_CRT_SIGNAL dir,datetime c2Time)
    if(partner=="" || partner==symbol || !SymbolSelect(partner,true))
       return false;
 
-   int primaryShift=iBarShift(symbol,tf,c2Time,false);
-   int partnerShift=iBarShift(partner,tf,c2Time,false);
-   if(primaryShift<0 || partnerShift<0)
-      return false;
+   int leftBars=MathMax(1,Major_Swing_Left_Bars);
+   int rightBars=MathMax(1,Major_Swing_Right_Bars);
+   int requestedBars=MathMax(100,MathMin(Bars_To_Check,1000));
+   int requiredBars=requestedBars;
 
    MqlRates primary[],paired[];
    ArraySetAsSeries(primary,true);
    ArraySetAsSeries(paired,true);
-   if(CopyRates(symbol,tf,primaryShift,2,primary)<2 ||
-      CopyRates(partner,tf,partnerShift,2,paired)<2)
+
+   int primaryCopied=CopyRates(symbol,tf,0,requestedBars,primary);
+   int partnerCopied=CopyRates(partner,tf,0,requestedBars,paired);
+   if(primaryCopied<leftBars+rightBars+3 ||
+      partnerCopied<leftBars+rightBars+3)
       return false;
 
-   // Both instruments must have the exact same C2 and C1 candle times.
-   if(primary[0].time!=c2Time || paired[0].time!=c2Time ||
-      primary[1].time!=paired[1].time)
-      return false;
-
-   // Primary must sweep its C1 extreme; the paired instrument must not.
-   if(dir==CRT_BULL)
-      return (primary[0].low<primary[1].low &&
-              paired[0].low>=paired[1].low);
+   double primaryLatest=0.0,primaryPrevious=0.0;
+   double partnerLatest=0.0,partnerPrevious=0.0;
 
    if(dir==CRT_BEAR)
-      return (primary[0].high>primary[1].high &&
-              paired[0].high<=paired[1].high);
+   {
+      // Bearish SMT: primary makes a higher high; partner does not make
+      // a lower low. A flat or higher partner low also qualifies as failure.
+      if(!MAGetLatestTwoSMTPivots(primary,primaryCopied,true,leftBars,rightBars,
+                                  primaryLatest,primaryPrevious) ||
+         !MAGetLatestTwoSMTPivots(paired,partnerCopied,false,leftBars,rightBars,
+                                  partnerLatest,partnerPrevious))
+         return false;
+
+      return (primaryLatest>primaryPrevious &&
+              partnerLatest>=partnerPrevious);
+   }
+
+   if(dir==CRT_BULL)
+   {
+      // Bullish SMT: primary makes a lower low; partner does not make
+      // a higher high. A flat or lower partner high also qualifies as failure.
+      if(!MAGetLatestTwoSMTPivots(primary,primaryCopied,false,leftBars,rightBars,
+                                  primaryLatest,primaryPrevious) ||
+         !MAGetLatestTwoSMTPivots(paired,partnerCopied,true,leftBars,rightBars,
+                                  partnerLatest,partnerPrevious))
+         return false;
+
+      return (primaryLatest<primaryPrevious &&
+              partnerLatest<=partnerPrevious);
+   }
 
    return false;
 }
