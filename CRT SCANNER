@@ -2994,7 +2994,7 @@ bool MAGetLatestTwoSMTPivots(const MqlRates &rates[],int copied,bool useHigh,
 // Swing timestamps are intentionally independent; they do NOT need to match.
 // EURUSD bearish: EURUSD makes HH while USDX fails to make LL.
 // EURUSD bullish: EURUSD makes LL while USDX fails to make HH.
-bool CheckSMT(int stateIndex,ENUM_CRT_SIGNAL dir,datetime c2Time)
+bool CheckSMT(int stateIndex,ENUM_CRT_SIGNAL dir)
 {
    string symbol=g_states[stateIndex].symbol;
    ENUM_TIMEFRAMES tf=g_states[stateIndex].timeframe;
@@ -3006,7 +3006,6 @@ bool CheckSMT(int stateIndex,ENUM_CRT_SIGNAL dir,datetime c2Time)
    int leftBars=MathMax(1,Major_Swing_Left_Bars);
    int rightBars=MathMax(1,Major_Swing_Right_Bars);
    int requestedBars=MathMax(100,MathMin(Bars_To_Check,1000));
-   int requiredBars=requestedBars;
 
    MqlRates primary[],paired[];
    ArraySetAsSeries(primary,true);
@@ -3723,7 +3722,7 @@ void EvaluateCandidate(int i,const CRTCandidate &c,SetupEval &ev)
    if(InpUseTrendEMA && trendOK)
       ev.cfTrend=true; // EMA 24 is informational only; no score point
 
-   if(InpUseSMT && CheckSMT(i,dir,c.c2Time))
+   if(InpUseSMT && CheckSMT(i,dir))
    {
       ev.cfSMT=true;
       score++;
